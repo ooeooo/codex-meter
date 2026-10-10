@@ -9,10 +9,10 @@
 <p align="center">No extra account. No analytics. No Electron. Just one small native Mac app doing one useful job.</p>
 
 <p align="center">
-  <a href="https://github.com/TheJhyeFactor/codex-meter/releases/latest"><img src="https://img.shields.io/badge/macOS-13%2B-17181B?logo=apple" alt="macOS 13+"></a>
+  <a href="https://github.com/ooeooo/codex-meter/releases/latest"><img src="https://img.shields.io/badge/macOS-13%2B-17181B?logo=apple" alt="macOS 13+"></a>
   <a href="https://www.swift.org/"><img src="https://img.shields.io/badge/Swift-6-17181B?logo=swift&logoColor=white" alt="Swift 6"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-17181B" alt="MIT License"></a>
-  <a href="https://github.com/TheJhyeFactor/codex-meter/releases/latest"><img src="https://img.shields.io/github/v/release/TheJhyeFactor/codex-meter?display_name=tag&sort=semver&color=087FF5" alt="Latest release"></a>
+  <a href="https://github.com/ooeooo/codex-meter/releases/latest"><img src="https://img.shields.io/github/v/release/ooeooo/codex-meter?display_name=tag&sort=semver&color=087FF5" alt="Latest release"></a>
 </p>
 
 Codex Meter is a free, open-source macOS menu bar app that shows how much Codex usage you have left, when it resets, which models used it, and what that activity would cost at standard API rates.
@@ -49,6 +49,9 @@ Alert thresholds, menu-bar modes, history charts, cost rates and CLI automation 
 
 ## Features
 
+- Includes a native macOS application icon with standard and Retina sizes.
+- Supports English and Simplified Chinese, following the system language by default, with an instant language switch in Settings.
+
 - Shows the most constrained Codex allowance directly in the macOS menu bar.
 - Shows weekly pace against an even seven-day allowance, with a compact reset, percentage and pace badge.
 - Breaks down every available usage window with a percentage and local reset time.
@@ -73,13 +76,19 @@ Alert thresholds, menu-bar modes, history charts, cost rates and CLI automation 
 
 ## Download and install
 
-1. Download the latest `Codex-Meter-*.zip` from [GitHub Releases](https://github.com/TheJhyeFactor/codex-meter/releases/latest).
+1. Download the latest `Codex-Meter-*.zip` from [GitHub Releases](https://github.com/ooeooo/codex-meter/releases/latest).
 2. Unzip it and move **Codex Meter.app** into `/Applications`.
 3. Open it once. The gauge and remaining percentage will appear in your menu bar.
 
 The ZIP also includes the optional `codex-meter` command-line tool and an installation note.
 
-The current community build is ad-hoc signed, not Apple-notarized. If macOS blocks the first launch, Control-click the app in Finder, choose **Open**, then confirm **Open** once. The normal double-click flow works after that.
+The current community build is ad-hoc signed, not Apple-notarized. If macOS blocks an app downloaded from this repository, open **System Settings → Privacy & Security → Open Anyway** after the first launch attempt, then confirm. See [Apple’s instructions](https://support.apple.com/102445).
+
+### 中文界面
+
+应用默认跟随系统语言。点击菜单栏图标，展开 **Settings（设置）**，在 **Language（语言）** 中选择 **简体中文** 即可立即切换；选择会自动保存。中文覆盖用量、图表、设置、账号弹窗、通知和常见错误提示。命令行工具保持英文及稳定的 JSON 输出，方便脚本使用。
+
+macOS 使用打包后的 ICNS 图标；原始 PNG 和多尺寸 ICO 位于 `Resources/`，构建时使用系统自带的 `sips`、`iconutil`，无需新增依赖。
 
 ### Requirements
 
@@ -139,7 +148,7 @@ The result includes each model's token total, share, pricing status and estimate
 You need the macOS Swift toolchain.
 
 ```sh
-git clone https://github.com/TheJhyeFactor/codex-meter.git
+git clone https://github.com/ooeooo/codex-meter.git
 cd codex-meter
 SKIP_LIVE_CODEX_CHECK=1 ./scripts/test.sh
 ./scripts/build-app.sh
@@ -154,7 +163,7 @@ GitHub Actions can build the app without a local Mac. CI uploads downloadable de
 
 A usage meter should be easy to inspect and easy to trust. You can see exactly what Codex Meter runs, how it reads the percentage, what it stores, and what it does not touch.
 
-If you find a bug or have a practical improvement, [open an issue](https://github.com/TheJhyeFactor/codex-meter/issues) or read [CONTRIBUTING.md](CONTRIBUTING.md).
+If you find a bug or have a practical improvement, [open an issue](https://github.com/ooeooo/codex-meter/issues) or read [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Widget status
 

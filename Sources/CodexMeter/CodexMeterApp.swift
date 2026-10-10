@@ -26,7 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "gauge", accessibilityDescription: "Codex usage")
+            button.image = NSImage(systemSymbolName: "gauge", accessibilityDescription: MeterLocalization.text("Codex usage"))
             button.imagePosition = .imageLeading
             button.title = "—"
             button.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
@@ -64,6 +64,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.updateStatusItem() }
             .store(in: &cancellables)
+        store.$language
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.updateStatusItem() }
+            .store(in: &cancellables)
         updateStatusItem()
     }
 
@@ -71,9 +75,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         guard let button = statusItem.button else { return }
         if NSApp.currentEvent?.type == .rightMouseUp {
             let menu = NSMenu()
-            menu.addItem(withTitle: "Refresh", action: #selector(refresh), keyEquivalent: "r").target = self
+            menu.addItem(withTitle: MeterLocalization.text("Refresh"), action: #selector(refresh), keyEquivalent: "r").target = self
             menu.addItem(.separator())
-            menu.addItem(withTitle: "Quit Codex Meter", action: #selector(quit), keyEquivalent: "q").target = self
+            menu.addItem(withTitle: MeterLocalization.text("Quit Codex Meter"), action: #selector(quit), keyEquivalent: "q").target = self
             statusItem.menu = menu
             button.performClick(nil)
             statusItem.menu = nil
@@ -97,7 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             let remaining = window.remainingPercent
             switch store.displayMode {
             case .iconAndPercentage:
-                button.image = NSImage(systemSymbolName: "gauge", accessibilityDescription: "Codex usage")
+                button.image = NSImage(systemSymbolName: "gauge", accessibilityDescription: MeterLocalization.text("Codex usage"))
                 button.imagePosition = .imageLeading
                 button.title = "\(remaining)%"
             case .resetAndPercentage:
@@ -109,35 +113,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 button.image = nil
                 button.title = "\(remaining)%"
             case .icon:
-                button.image = NSImage(systemSymbolName: "gauge", accessibilityDescription: "Codex usage")
+                button.image = NSImage(systemSymbolName: "gauge", accessibilityDescription: MeterLocalization.text("Codex usage"))
                 button.imagePosition = .imageOnly
                 button.title = ""
             case .activity:
                 let days = store.activity?.days ?? []
                 button.image = days.isEmpty
-                    ? NSImage(systemSymbolName: "chart.bar", accessibilityDescription: "Codex activity")
+                    ? NSImage(systemSymbolName: "chart.bar", accessibilityDescription: MeterLocalization.text("Codex activity"))
                     : activityImage(from: days)
                 button.imagePosition = .imageOnly
                 button.title = ""
             }
             let countdown = ResetCountdownFormatter.format(until: window.resetsAt)
             let exactReset = window.resetsAt.map {
-                " Resets \($0.formatted(date: .abbreviated, time: .shortened))."
+                MeterLocalization.format(" Resets %@.", $0.formatted(.dateTime.year().month(.abbreviated).day().hour().minute().locale(MeterLocalization.locale)))
             } ?? ""
-            let paceText = WeeklyPace(window: window).map { " Weekly pace: \($0.summaryText)." } ?? ""
-            button.toolTip = "\(window.displayName): \(remaining)% remaining. \(countdown.accessibilityText).\(exactReset)\(paceText)"
+            let paceText = WeeklyPace(window: window).map { MeterLocalization.format(" Weekly pace: %@.", $0.summaryText) } ?? ""
+            button.toolTip = MeterLocalization.format("%@: %d%% remaining. %@.%@%@", window.displayName, remaining, countdown.accessibilityText, exactReset, paceText)
         } else {
-            button.image = NSImage(systemSymbolName: "exclamationmark.circle", accessibilityDescription: "Codex usage unavailable")
+            button.image = NSImage(systemSymbolName: "exclamationmark.circle", accessibilityDescription: MeterLocalization.text("Codex usage unavailable"))
             button.title = "—"
             if let error = store.errorMessage {
-                button.toolTip = "Codex usage unavailable: \(error)"
+                button.toolTip = MeterLocalization.format("Codex usage unavailable: %@", error)
             } else if store.isStale, let updated = store.payload?.fetchedAt {
-                button.toolTip = "Codex usage is out of date. Last updated \(updated.formatted(date: .omitted, time: .shortened))."
+                button.toolTip = MeterLocalization.format("Codex usage is out of date. Last updated %@.", updated.formatted(.dateTime.hour().minute().locale(MeterLocalization.locale)))
             } else {
-                button.toolTip = "Checking Codex usage"
+                button.toolTip = MeterLocalization.text("Checking Codex usage")
             }
         }
-        button.setAccessibilityLabel(button.toolTip ?? "Codex usage")
+        button.setAccessibilityLabel(button.toolTip ?? MeterLocalization.text("Codex usage"))
     }
 
     private func weeklyBadgeImage(countdown: ResetCountdown, remaining: Int, pace: WeeklyPace?) -> NSImage {
@@ -194,7 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             return true
         }
         image.isTemplate = true
-        image.accessibilityDescription = "\(remaining) percent remaining, \(countdown.accessibilityText)\(pace.map { ", weekly pace \($0.summaryText)" } ?? "")"
+        image.accessibilityDescription = MeterLocalization.format("%d percent remaining, %@%@", remaining, countdown.accessibilityText, pace.map { MeterLocalization.format(", weekly pace %@", $0.summaryText) } ?? "")
         return image
     }
 
@@ -223,7 +227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             NSBezierPath(roundedRect: NSRect(x: CGFloat(index) * 3.1, y: 1, width: 2.2, height: CGFloat(height)), xRadius: 0.7, yRadius: 0.7).fill()
         }
         image.isTemplate = true
-        image.accessibilityDescription = "Seven-day Codex activity"
+        image.accessibilityDescription = MeterLocalization.text("Seven-day Codex activity")
         return image
     }
 }

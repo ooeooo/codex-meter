@@ -56,10 +56,10 @@ public enum LocalActivityError: LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case .unreadableSource: return "Local Codex session history is not readable."
-        case .filterUnavailable: return "The local history filter could not be started."
-        case .filterFailed: return "Local Codex session history could not be filtered."
-        case .unsupportedRecords: return "Codex returned an unsupported local usage record format."
+        case .unreadableSource: return MeterLocalization.text("Local Codex session history is not readable.")
+        case .filterUnavailable: return MeterLocalization.text("The local history filter could not be started.")
+        case .filterFailed: return MeterLocalization.text("Local Codex session history could not be filtered.")
+        case .unsupportedRecords: return MeterLocalization.text("Codex returned an unsupported local usage record format.")
         }
     }
 }

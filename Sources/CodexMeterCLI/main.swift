@@ -37,6 +37,8 @@ private struct ParsedOptions {
 @main
 struct CodexMeterCLI {
     static func main() async {
+        // Keep CLI labels and JSON window names stable for automation.
+        MeterLocalization.language = .english
         do {
             let arguments = Array(CommandLine.arguments.dropFirst())
             if arguments.contains("--help") || arguments.contains("-h") {

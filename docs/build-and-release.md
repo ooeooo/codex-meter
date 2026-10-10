@@ -59,4 +59,4 @@ SKIP_LIVE_CODEX_CHECK=1 ./scripts/test.sh
 ./scripts/package-app.sh dist
 ```
 
-The packaging script verifies both architectures, signatures and CLI execution after extracting the generated ZIP. The ZIP and checksum file are written into `dist/`. A custom package label can be supplied as the second argument.
+The build script converts `Resources/AppIcon.png` into a complete macOS ICNS icon using system `sips` and `iconutil`, and bundles `en` and `zh-Hans` display-name resources. The packaging script verifies the extracted icon, language resources, both architectures, signatures and CLI execution after extracting the generated ZIP. The ZIP and checksum file are written into `dist/`. A custom package label can be supplied as the second argument.

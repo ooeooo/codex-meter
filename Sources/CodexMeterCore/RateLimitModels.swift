@@ -10,12 +10,12 @@ public enum CodexClientError: LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case .executableNotFound: return "Codex is not installed in a supported location."
-        case .launch(let message): return "Could not start Codex: \(message)"
-        case .disconnected: return "The Codex usage service stopped unexpectedly."
-        case .timedOut: return "Codex did not return usage data in time."
-        case .server(let message): return message
-        case .invalidResponse: return "Codex returned usage data in an unknown format."
+        case .executableNotFound: return MeterLocalization.text("Codex is not installed in a supported location.")
+        case .launch(let message): return MeterLocalization.format("Could not start Codex: %@", message)
+        case .disconnected: return MeterLocalization.text("The Codex usage service stopped unexpectedly.")
+        case .timedOut: return MeterLocalization.text("Codex did not return usage data in time.")
+        case .server(let message): return MeterLocalization.text(message)
+        case .invalidResponse: return MeterLocalization.text("Codex returned usage data in an unknown format.")
         }
     }
 }
@@ -34,11 +34,11 @@ public struct RateLimitWindow: Equatable, Sendable, Codable {
     public var remainingPercent: Int { max(0, min(100, 100 - usedPercent)) }
 
     public var displayName: String {
-        guard let durationMinutes else { return "Usage window" }
-        if durationMinutes <= 360 { return "5-hour limit" }
-        if durationMinutes >= 9_000 { return "Weekly limit" }
-        if durationMinutes >= 1_200 { return "Daily limit" }
-        return "\(durationMinutes / 60)-hour limit"
+        guard let durationMinutes else { return MeterLocalization.text("Usage window") }
+        if durationMinutes <= 360 { return MeterLocalization.text("5-hour limit") }
+        if durationMinutes >= 9_000 { return MeterLocalization.text("Weekly limit") }
+        if durationMinutes >= 1_200 { return MeterLocalization.text("Daily limit") }
+        return MeterLocalization.format("%lld-hour limit", Int64(durationMinutes / 60))
     }
 }
 
@@ -57,25 +57,27 @@ public struct ResetCountdown: Equatable, Sendable {
 public enum ResetCountdownFormatter {
     public static func format(until resetDate: Date?, now: Date = Date()) -> ResetCountdown {
         guard let resetDate else {
-            return ResetCountdown(daysText: "--", hoursText: "--", accessibilityText: "Reset time unavailable")
+            return ResetCountdown(daysText: "--", hoursText: "--", accessibilityText: MeterLocalization.text("Reset time unavailable"))
         }
 
         let secondsRemaining = max(0, Int(resetDate.timeIntervalSince(now)))
+        // The menu-bar badge has a fixed 17-point column; retain the compact
+        // day/hour suffixes and localize its full accessibility description.
         if secondsRemaining == 0 {
-            return ResetCountdown(daysText: "0d", hoursText: "0h", accessibilityText: "Resetting now")
+            return ResetCountdown(daysText: "0d", hoursText: "0h", accessibilityText: MeterLocalization.text("Resetting now"))
         }
         if secondsRemaining < 3_600 {
-            return ResetCountdown(daysText: "0d", hoursText: "<1h", accessibilityText: "Less than 1 hour until reset")
+            return ResetCountdown(daysText: "0d", hoursText: "<1h", accessibilityText: MeterLocalization.text("Less than 1 hour until reset"))
         }
 
         let days = secondsRemaining / 86_400
         let hours = (secondsRemaining % 86_400) / 3_600
-        let dayUnit = days == 1 ? "day" : "days"
-        let hourUnit = hours == 1 ? "hour" : "hours"
+        let dayUnit = MeterLocalization.text(days == 1 ? "day" : "days")
+        let hourUnit = MeterLocalization.text(hours == 1 ? "hour" : "hours")
         return ResetCountdown(
             daysText: "\(days)d",
             hoursText: "\(hours)h",
-            accessibilityText: "\(days) \(dayUnit), \(hours) \(hourUnit) until reset"
+            accessibilityText: MeterLocalization.format("%d %@, %d %@ until reset", days, dayUnit, hours, hourUnit)
         )
     }
 }
@@ -130,19 +132,19 @@ public struct WeeklyPace: Equatable, Sendable, Codable {
     }
 
     public var summaryText: String {
-        guard abs(deltaPoints) >= 0.5 else { return "On pace" }
+        guard abs(deltaPoints) >= 0.5 else { return MeterLocalization.text("On pace") }
         let totalHours = max(1, Int(equivalentTime / 3_600))
         let days = totalHours / 24
         let hours = totalHours % 24
         let timeText: String
         if days > 0, hours > 0 {
-            timeText = "\(days)d \(hours)h"
+            timeText = MeterLocalization.format("%dd %dh", days, hours)
         } else if days > 0 {
-            timeText = "\(days)d"
+            timeText = MeterLocalization.format("%dd", days)
         } else {
-            timeText = "\(hours)h"
+            timeText = MeterLocalization.format("%dh", hours)
         }
-        return deltaPoints > 0 ? "usage is \(timeText) ahead" : "usage is \(timeText) under pace"
+        return MeterLocalization.format(deltaPoints > 0 ? "usage is %@ ahead" : "usage is %@ under pace", timeText)
     }
 }
 

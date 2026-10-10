@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.0 — 2026-10-10
+
+- Added an original macOS application icon, generated as ICNS with native system tools at all standard and Retina sizes; included PNG and ICO source assets.
+- Added English and Simplified Chinese interfaces with system language detection, a persistent Settings language selector and immediate UI refresh.
+- Localized usage charts, settings, account dialogs, notifications, accessibility labels, dates and common errors; kept CLI output and JSON labels stable in English.
+- Added localization regression checks and verified icon and language resources in the final release package.
+- Updated installation instructions for current macOS Gatekeeper prompts.
+
 ## 1.5.0 — 2026-07-15
 
 - Moved the named account switcher beside refresh with an explicit down-arrow affordance.

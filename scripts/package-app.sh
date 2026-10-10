@@ -35,6 +35,22 @@ ditto -c -k --norsrc --noextattr --noqtn --noacl --keepParent \
 mkdir "$STAGE/check"
 unzip -q "$STAGE/$ARCHIVE" -d "$STAGE/check"
 CHECK_ROOT="$STAGE/check/$PACKAGE"
+CHECK_APP="$CHECK_ROOT/Codex Meter.app"
+/usr/bin/plutil -lint "$CHECK_APP/Contents/Info.plist"
+ICON_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$CHECK_APP/Contents/Info.plist")"
+if [[ "$ICON_NAME" != 'AppIcon' || ! -s "$CHECK_APP/Contents/Resources/AppIcon.icns" ]]; then
+  echo 'The extracted app must reference and include AppIcon.icns.' >&2
+  exit 1
+fi
+/usr/bin/iconutil --convert iconset --output "$STAGE/check-icon.iconset" \
+  "$CHECK_APP/Contents/Resources/AppIcon.icns"
+if [[ ! -s "$STAGE/check-icon.iconset/icon_512x512@2x.png" ]]; then
+  echo 'The extracted app icon is missing its 1024-pixel Retina image.' >&2
+  exit 1
+fi
+for LOCALIZATION in en zh-Hans; do
+  /usr/bin/plutil -lint "$CHECK_APP/Contents/Resources/$LOCALIZATION.lproj/InfoPlist.strings"
+done
 lipo "$CHECK_ROOT/Codex Meter.app/Contents/MacOS/CodexMeter" -verify_arch arm64 x86_64
 lipo "$CHECK_ROOT/codex-meter" -verify_arch arm64 x86_64
 codesign --verify --deep --strict "$CHECK_ROOT/Codex Meter.app"

@@ -6,30 +6,35 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 swiftc \
+  "$ROOT/Sources/CodexMeterCore/MeterLocalization.swift" \
   "$ROOT/Sources/CodexMeterCore/RateLimitModels.swift" \
   "$ROOT/Tests/ParserCheck.swift" \
   -o "$TMP/parser-check"
 "$TMP/parser-check"
 
 swiftc \
+  "$ROOT/Sources/CodexMeterCore/MeterLocalization.swift" \
   "$ROOT/Sources/CodexMeterCore/RateLimitModels.swift" \
   "$ROOT/Tests/WeeklyPaceCheck.swift" \
   -o "$TMP/weekly-pace-check"
 "$TMP/weekly-pace-check"
 
 swiftc \
+  "$ROOT/Sources/CodexMeterCore/MeterLocalization.swift" \
   "$ROOT/Sources/CodexMeterCore/LocalActivity.swift" \
   "$ROOT/Tests/ActivityCheck.swift" \
   -o "$TMP/activity-check"
 "$TMP/activity-check"
 
 swiftc \
+  "$ROOT/Sources/CodexMeterCore/MeterLocalization.swift" \
   "$ROOT/Sources/CodexMeterCore/AccountProfileStorage.swift" \
   "$ROOT/Tests/AccountProfileStorageCheck.swift" \
   -o "$TMP/account-profile-storage-check"
 "$TMP/account-profile-storage-check"
 
 swiftc \
+  "$ROOT/Sources/CodexMeterCore/MeterLocalization.swift" \
   -parse-as-library \
   "$ROOT/Sources/CodexMeterCore/RateLimitModels.swift" \
   "$ROOT/Sources/CodexMeterCore/CodexAppServerClient.swift" \
@@ -39,12 +44,23 @@ swiftc \
 
 if [[ "${SKIP_LIVE_CODEX_CHECK:-0}" != "1" ]]; then
   swiftc \
+    "$ROOT/Sources/CodexMeterCore/MeterLocalization.swift" \
     "$ROOT/Sources/CodexMeterCore/RateLimitModels.swift" \
     "$ROOT/Sources/CodexMeterCore/CodexAppServerClient.swift" \
     "$ROOT/Tests/LiveCheck.swift" \
     -o "$TMP/live-check"
   "$TMP/live-check"
 fi
+
+swiftc \
+  -parse-as-library \
+  "$ROOT/Sources/CodexMeterCore/MeterLocalization.swift" \
+  "$ROOT/Sources/CodexMeterCore/RateLimitModels.swift" \
+  "$ROOT/Sources/CodexMeterCore/LocalActivity.swift" \
+  "$ROOT/Sources/CodexMeterCore/CodexAppServerClient.swift" \
+  "$ROOT/Tests/LocalizationCheck.swift" \
+  -o "$TMP/localization-check"
+"$TMP/localization-check"
 
 swift build --package-path "$ROOT"
 "$ROOT/.build/debug/codex-meter" --help >/dev/null

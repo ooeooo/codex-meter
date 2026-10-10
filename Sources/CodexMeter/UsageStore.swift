@@ -14,11 +14,11 @@ enum MenuBarDisplayMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .iconAndPercentage: return "Icon + percentage"
-        case .resetAndPercentage: return "Reset + percentage"
-        case .percentage: return "Percentage only"
-        case .icon: return "Icon only"
-        case .activity: return "Activity chart"
+        case .iconAndPercentage: return MeterLocalization.text("Icon + percentage")
+        case .resetAndPercentage: return MeterLocalization.text("Reset + percentage")
+        case .percentage: return MeterLocalization.text("Percentage only")
+        case .icon: return MeterLocalization.text("Icon only")
+        case .activity: return MeterLocalization.text("Activity chart")
         }
     }
 }
@@ -30,7 +30,7 @@ struct AccountProfile: Codable, Equatable, Identifiable {
     var email: String?
 
     var homeURL: URL? { homePath.map(URL.init(fileURLWithPath:)) }
-    var displayName: String { email ?? name }
+    var displayName: String { email ?? (homePath == nil ? MeterLocalization.text("Default") : name) }
 }
 
 struct Celebration: Equatable, Identifiable {
@@ -48,6 +48,13 @@ final class UsageStore: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var activity: LocalActivitySnapshot?
     @Published private(set) var activityError: String?
+    @Published var language: MeterLanguage {
+        didSet {
+            MeterLocalization.language = language
+            UserDefaults.standard.set(language.rawValue, forKey: Self.languageKey)
+            renderLocalizedMessages()
+        }
+    }
     @Published var alertThreshold: Int {
         didSet { UserDefaults.standard.set(alertThreshold, forKey: Self.thresholdKey) }
     }
@@ -76,6 +83,13 @@ final class UsageStore: ObservableObject {
     private var activityPollingTask: Task<Void, Never>?
     private var loginTasks: [UUID: Task<Void, Never>] = [:]
     private var lastUsageDiagnostics: String?
+    // Retain message sources for language changes; renderers capture local values,
+    // rather than this store, so keeping a message cannot create a retain cycle.
+    private var errorMessageRenderer: (() -> String?)?
+    private var activityErrorRenderer: (() -> String?)?
+    private var accountSwitchStatusRenderer: (() -> String?)?
+    private var celebrationRenderer: (() -> Celebration?)?
+    private static let languageKey = "appLanguage"
     private static let thresholdKey = "alertThreshold"
     private static let notifiedResetKey = "lastNotifiedReset"
     private static let displayModeKey = "menuBarDisplayMode"
@@ -90,6 +104,9 @@ final class UsageStore: ObservableObject {
     private static let resetMilestoneKey = "lastBankedReset"
 
     init(previewMode: Bool = false) {
+        let savedLanguage = MeterLanguage(rawValue: UserDefaults.standard.string(forKey: Self.languageKey) ?? "") ?? .system
+        MeterLocalization.language = savedLanguage
+        self.language = savedLanguage
         let defaultAccount = AccountProfile(id: Self.defaultAccountID, name: "Default", homePath: nil, email: nil)
         let loadedAccounts: [AccountProfile]
         if let data = UserDefaults.standard.data(forKey: Self.accountsKey),
@@ -155,8 +172,11 @@ final class UsageStore: ObservableObject {
     }
 
     var windows: [RateLimitWindow] { payload?.snapshot.windows ?? [] }
-    var activeAccountName: String { accounts.first(where: { $0.id == activeAccountID })?.name ?? "Default" }
-    var activeAccountDisplayName: String { accounts.first(where: { $0.id == activeAccountID })?.displayName ?? "Default" }
+    var activeAccountName: String {
+        guard let account = accounts.first(where: { $0.id == activeAccountID }) else { return MeterLocalization.text("Default") }
+        return account.homePath == nil ? MeterLocalization.text("Default") : account.name
+    }
+    var activeAccountDisplayName: String { accounts.first(where: { $0.id == activeAccountID })?.displayName ?? MeterLocalization.text("Default") }
     var canDeleteActiveAccount: Bool { accounts.first(where: { $0.id == activeAccountID })?.homePath != nil }
     var bankedResetCount: Int? { payload?.availableResetCredits }
     var totalSavingsUSD: Double {
@@ -187,6 +207,33 @@ final class UsageStore: ObservableObject {
         return Date().timeIntervalSince(fetchedAt) > 180
     }
 
+    private func setErrorMessage(_ render: @autoclosure @escaping () -> String?) {
+        errorMessageRenderer = render
+        errorMessage = render()
+    }
+
+    private func setActivityError(_ render: @autoclosure @escaping () -> String?) {
+        activityErrorRenderer = render
+        activityError = render()
+    }
+
+    private func setAccountSwitchStatus(_ render: @autoclosure @escaping () -> String?) {
+        accountSwitchStatusRenderer = render
+        accountSwitchStatus = render()
+    }
+
+    private func setCelebration(_ render: @autoclosure @escaping () -> Celebration?) {
+        celebrationRenderer = render
+        celebration = render()
+    }
+
+    private func renderLocalizedMessages() {
+        errorMessage = errorMessageRenderer?()
+        activityError = activityErrorRenderer?()
+        accountSwitchStatus = accountSwitchStatusRenderer?()
+        celebration = celebrationRenderer?()
+    }
+
     func start() {
         guard !previewMode else { return }
         pollingTask?.cancel()
@@ -213,11 +260,11 @@ final class UsageStore: ObservableObject {
         do {
             let previous = activity
             activity = try await activityScanner.scan(days: 7)
-            activityError = nil
+            setActivityError(nil)
             detectActivityMilestones(previous: previous, current: activity)
         } catch {
             activity = nil
-            activityError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            setActivityError((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
         }
     }
 
@@ -229,12 +276,12 @@ final class UsageStore: ObservableObject {
             let newPayload = try await client.readRateLimits()
             let previous = payload
             payload = newPayload
-            errorMessage = newPayload.snapshot.windows.isEmpty ? "No Codex rate-limit windows were returned for this account." : nil
+            setErrorMessage(newPayload.snapshot.windows.isEmpty ? MeterLocalization.text("No Codex rate-limit windows were returned for this account.") : nil)
             if errorMessage == nil { lastUsageDiagnostics = nil }
             await notifyIfNeeded(newPayload)
             detectBankedResetMilestone(previous: previous, current: newPayload)
         } catch {
-            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            setErrorMessage((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
             lastUsageDiagnostics = await client.diagnosticSummary()
             await client.stop()
         }
@@ -243,13 +290,13 @@ final class UsageStore: ObservableObject {
     func copyUsageDiagnostics() {
         let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
         let text = [
-            "Codex Meter diagnostics",
-            "Version: \(appVersion)",
-            "Time: \(Date().formatted(date: .numeric, time: .standard))",
-            "Active profile: \(activeAccountName) (\(activeAccountID == Self.defaultAccountID ? "default CODEX_HOME" : "isolated CODEX_HOME"))",
-            "Last successful refresh: \(payload?.fetchedAt.formatted(date: .numeric, time: .standard) ?? "none")",
-            "Usage error: \(errorMessage ?? "none")",
-            lastUsageDiagnostics ?? "Protocol diagnostics: unavailable"
+            MeterLocalization.text("Codex Meter diagnostics"),
+            MeterLocalization.format("Version: %@", appVersion),
+            MeterLocalization.format("Time: %@", Date().formatted(.dateTime.locale(MeterLocalization.locale))),
+            MeterLocalization.format("Active profile: %@ (%@)", activeAccountName, MeterLocalization.text(activeAccountID == Self.defaultAccountID ? "default CODEX_HOME" : "isolated CODEX_HOME")),
+            MeterLocalization.format("Last successful refresh: %@", payload?.fetchedAt.formatted(.dateTime.locale(MeterLocalization.locale)) ?? MeterLocalization.text("none")),
+            MeterLocalization.format("Usage error: %@", errorMessage ?? MeterLocalization.text("none")),
+            lastUsageDiagnostics ?? MeterLocalization.text("Protocol diagnostics: unavailable")
         ].joined(separator: "\n")
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
@@ -260,7 +307,7 @@ final class UsageStore: ObservableObject {
         do {
             if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
         } catch {
-            errorMessage = "Launch at login could not be changed: \(error.localizedDescription)"
+            setErrorMessage(MeterLocalization.format("Launch at login could not be changed: %@", error.localizedDescription))
         }
         launchAtLogin = SMAppService.mainApp.status == .enabled
     }
@@ -275,13 +322,13 @@ final class UsageStore: ObservableObject {
         let discoveredURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex")
         let fallbackURL = URL(fileURLWithPath: "/Applications/ChatGPT.app")
         guard let appURL = discoveredURL ?? (FileManager.default.fileExists(atPath: fallbackURL.path) ? fallbackURL : nil) else {
-            errorMessage = "Codex is not installed in /Applications."
+            setErrorMessage(MeterLocalization.text("Codex is not installed in /Applications."))
             return
         }
         NSWorkspace.shared.openApplication(at: appURL, configuration: .init()) { [weak self] _, error in
             Task { @MainActor in
                 if let error {
-                    self?.errorMessage = "Codex could not be opened: \(error.localizedDescription)"
+                    self?.setErrorMessage(MeterLocalization.format("Codex could not be opened: %@", error.localizedDescription))
                 } else if let settingsURL {
                     _ = NSWorkspace.shared.open(settingsURL)
                 }
@@ -294,20 +341,20 @@ final class UsageStore: ObservableObject {
         guard let profile = accounts.first(where: { $0.id == id }) else { return }
 
         let alert = NSAlert()
-        alert.messageText = "Switch to \(profile.displayName)?"
+        alert.messageText = MeterLocalization.format("Switch to %@?", profile.displayName)
         alert.informativeText = profile.homeURL == nil
-            ? "This is the Codex desktop profile. Codex Meter will switch its usage view to the account currently signed in there."
-            : "Choose whether to switch only Codex Meter, or also sign the Codex desktop app out and open OpenAI's secure browser login for this account."
+            ? MeterLocalization.text("This is the Codex desktop profile. Codex Meter will switch its usage view to the account currently signed in there.")
+            : MeterLocalization.text("Choose whether to switch only Codex Meter, or also sign the Codex desktop app out and open OpenAI's secure browser login for this account.")
         if profile.homeURL == nil {
-            alert.addButton(withTitle: "Switch Meter")
-            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: MeterLocalization.text("Switch Meter"))
+            alert.addButton(withTitle: MeterLocalization.text("Cancel"))
             guard alert.runModal() == .alertFirstButtonReturn else { return }
             switchMeterAccount(to: id)
             return
         }
-        alert.addButton(withTitle: "Meter + Codex")
-        alert.addButton(withTitle: "Meter Only")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: MeterLocalization.text("Meter + Codex"))
+        alert.addButton(withTitle: MeterLocalization.text("Meter Only"))
+        alert.addButton(withTitle: MeterLocalization.text("Cancel"))
         switch alert.runModal() {
         case .alertFirstButtonReturn:
             switchMeterAccount(to: id)
@@ -336,13 +383,13 @@ final class UsageStore: ObservableObject {
 
     func addAccount() {
         let alert = NSAlert()
-        alert.messageText = "Add Codex account"
-        alert.informativeText = "Choose a label. Codex Meter will open OpenAI's secure browser sign-in for a private profile on this Mac. Passwords and verification codes stay on OpenAI's page."
-        let field = NSTextField(string: "Work")
+        alert.messageText = MeterLocalization.text("Add Codex account")
+        alert.informativeText = MeterLocalization.text("Choose a label. Codex Meter will open OpenAI's secure browser sign-in for a private profile on this Mac. Passwords and verification codes stay on OpenAI's page.")
+        let field = NSTextField(string: MeterLocalization.text("Work"))
         field.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
         alert.accessoryView = field
-        alert.addButton(withTitle: "Continue")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: MeterLocalization.text("Continue"))
+        alert.addButton(withTitle: MeterLocalization.text("Cancel"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
@@ -362,7 +409,7 @@ final class UsageStore: ObservableObject {
             persistAccounts()
             startLogin(for: profile)
         } catch {
-            errorMessage = "The account profile could not be created: \(error.localizedDescription)"
+            setErrorMessage(MeterLocalization.format("The account profile could not be created: %@", error.localizedDescription))
         }
     }
 
@@ -375,10 +422,10 @@ final class UsageStore: ObservableObject {
         let wasActive = profile.id == activeAccountID
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Delete \(profile.name)?"
-        alert.informativeText = "This removes the locally saved Codex credentials and usage profile from this Mac. It does not delete the OpenAI account."
-        alert.addButton(withTitle: "Delete Account")
-        alert.addButton(withTitle: "Cancel")
+        alert.messageText = MeterLocalization.format("Delete %@?", profile.name)
+        alert.informativeText = MeterLocalization.text("This removes the locally saved Codex credentials and usage profile from this Mac. It does not delete the OpenAI account.")
+        alert.addButton(withTitle: MeterLocalization.text("Delete Account"))
+        alert.addButton(withTitle: MeterLocalization.text("Cancel"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
         if wasActive {
@@ -399,21 +446,21 @@ final class UsageStore: ObservableObject {
                     activity = nil
                     start()
                 }
-                celebration = Celebration(title: "Account removed", subtitle: "Local credentials were deleted", symbol: "trash")
+                setCelebration(Celebration(title: MeterLocalization.text("Account removed"), subtitle: MeterLocalization.text("Local credentials were deleted"), symbol: "trash"))
                 dismissCelebration()
             } catch {
                 if wasActive {
                     client = CodexAppServerClient(codexHome: profile.homeURL)
                     start()
                 }
-                errorMessage = "The local account could not be deleted: \(error.localizedDescription)"
+                setErrorMessage(MeterLocalization.format("The local account could not be deleted: %@", error.localizedDescription))
             }
         }
     }
 
     private func startLogin(for profile: AccountProfile) {
         guard let home = profile.homeURL else { return }
-        errorMessage = nil
+        setErrorMessage(nil)
         loginTasks[profile.id]?.cancel()
         loginTasks[profile.id] = Task { [weak self] in
             guard let self else { return }
@@ -434,7 +481,7 @@ final class UsageStore: ObservableObject {
                     self.persistAccounts()
                 }
                 self.switchMeterAccount(to: profile.id)
-                self.celebration = Celebration(title: "Account ready", subtitle: "Secure sign-in completed", symbol: "person.crop.circle.badge.checkmark")
+                self.setCelebration(Celebration(title: MeterLocalization.text("Account ready"), subtitle: MeterLocalization.text("Secure sign-in completed"), symbol: "person.crop.circle.badge.checkmark"))
                 self.dismissCelebration()
             } catch is CancellationError {
                 await loginClient.stop()
@@ -444,7 +491,7 @@ final class UsageStore: ObservableObject {
                 self.accounts.removeAll { $0.id == profile.id }
                 self.persistAccounts()
                 try? AccountProfileStorage.removeLocalProfile(at: home)
-                self.errorMessage = "OpenAI sign-in failed: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+                self.setErrorMessage(MeterLocalization.format("OpenAI sign-in failed: %@", (error as? LocalizedError)?.errorDescription ?? error.localizedDescription))
             }
         }
     }
@@ -461,7 +508,8 @@ final class UsageStore: ObservableObject {
         let savedStep = UserDefaults.standard.integer(forKey: Self.savingsMilestoneKey)
         if savingsStep > savedStep, savingsStep > 0 {
             UserDefaults.standard.set(savingsStep, forKey: Self.savingsMilestoneKey)
-            celebration = Celebration(title: "\(currency.code) \(Int(currency.convertFromUSD(newSavings))) saved", subtitle: "Estimated savings versus GPT-5.6 Sol", symbol: "sparkles")
+            let selectedCurrency = currency
+            setCelebration(Celebration(title: MeterLocalization.format("%@ %lld saved", selectedCurrency.code, Int64(selectedCurrency.convertFromUSD(newSavings))), subtitle: MeterLocalization.text("Estimated savings versus GPT-5.6 Sol"), symbol: "sparkles"))
             dismissCelebration()
             return
         }
@@ -469,7 +517,7 @@ final class UsageStore: ObservableObject {
         let oldTokenStep = UserDefaults.standard.integer(forKey: Self.tokenMilestoneKey)
         if tokenStep >= 1, tokenStep > oldTokenStep, (tokenStep % 10 == 0 || oldTokenStep == 0) {
             UserDefaults.standard.set(tokenStep, forKey: Self.tokenMilestoneKey)
-            celebration = Celebration(title: "Token milestone", subtitle: "You have used \(tokenStep)M local tokens", symbol: "bolt.fill")
+            setCelebration(Celebration(title: MeterLocalization.text("Token milestone"), subtitle: MeterLocalization.format("You have used %lldM local tokens", Int64(tokenStep)), symbol: "bolt.fill"))
             dismissCelebration()
         }
     }
@@ -487,21 +535,21 @@ final class UsageStore: ObservableObject {
         let key = "\(activeAccountID.uuidString)-\(currentCount)"
         guard UserDefaults.standard.string(forKey: Self.resetMilestoneKey) != key else { return }
         UserDefaults.standard.set(key, forKey: Self.resetMilestoneKey)
-        celebration = Celebration(title: "Reset banked", subtitle: "\(currentCount) available for this account", symbol: "arrow.counterclockwise.circle.fill")
+        setCelebration(Celebration(title: MeterLocalization.text("Reset banked"), subtitle: MeterLocalization.format("%lld available for this account", Int64(currentCount)), symbol: "arrow.counterclockwise.circle.fill"))
         dismissCelebration()
     }
 
     private func switchCodexDesktopAccount(to profile: AccountProfile) async {
         guard !isSwitchingCodexAccount else { return }
         isSwitchingCodexAccount = true
-        accountSwitchStatus = "Signing Codex out…"
-        errorMessage = nil
+        setAccountSwitchStatus(MeterLocalization.text("Signing Codex out…"))
+        setErrorMessage(nil)
 
         let desktopClient = CodexAppServerClient()
         do {
             var expectedEmail = profile.email
             if expectedEmail == nil, let home = profile.homeURL {
-                accountSwitchStatus = "Checking \(profile.name)…"
+                setAccountSwitchStatus(MeterLocalization.format("Checking %@…", profile.name))
                 let profileClient = CodexAppServerClient(codexHome: home)
                 if let account = try? await profileClient.readAccount() {
                     expectedEmail = account.email
@@ -512,10 +560,10 @@ final class UsageStore: ObservableObject {
                 }
                 await profileClient.stop()
             }
-            accountSwitchStatus = "Signing Codex out…"
+            setAccountSwitchStatus(MeterLocalization.text("Signing Codex out…"))
             try await closeCodexDesktop()
             try await desktopClient.logoutAccount()
-            accountSwitchStatus = "Waiting for secure OpenAI sign-in…"
+            setAccountSwitchStatus(MeterLocalization.text("Waiting for secure OpenAI sign-in…"))
             let login = try await desktopClient.startChatGPTLogin()
             guard NSWorkspace.shared.open(login.authorizationURL) else {
                 throw CodexClientError.server("The OpenAI sign-in page could not be opened in your browser.")
@@ -526,23 +574,23 @@ final class UsageStore: ObservableObject {
             }
             if let expected = expectedEmail, let actual = signedIn.email,
                expected.caseInsensitiveCompare(actual) != .orderedSame {
-                throw CodexClientError.server("Codex signed in as \(actual), not \(expected). Sign in again and choose the intended account.")
+                throw AccountMismatchError(actualEmail: actual, expectedEmail: expected)
             }
             await desktopClient.stop()
-            accountSwitchStatus = nil
+            setAccountSwitchStatus(nil)
             isSwitchingCodexAccount = false
             openCodex()
-            celebration = Celebration(
-                title: "Codex account switched",
+            setCelebration(Celebration(
+                title: MeterLocalization.text("Codex account switched"),
                 subtitle: signedIn.email ?? profile.displayName,
                 symbol: "person.crop.circle.badge.checkmark"
-            )
+            ))
             dismissCelebration()
         } catch {
             await desktopClient.stop()
-            accountSwitchStatus = nil
+            setAccountSwitchStatus(nil)
             isSwitchingCodexAccount = false
-            errorMessage = "Codex account switch failed: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+            setErrorMessage(MeterLocalization.format("Codex account switch failed: %@", (error as? LocalizedError)?.errorDescription ?? error.localizedDescription))
             openCodex()
         }
     }
@@ -560,7 +608,7 @@ final class UsageStore: ObservableObject {
     }
 
     private func dismissCelebration() {
-        Task { try? await Task.sleep(for: .seconds(4)); celebration = nil }
+        Task { try? await Task.sleep(for: .seconds(4)); setCelebration(nil) }
     }
 
     private func notifyIfNeeded(_ payload: RateLimitPayload) async {
@@ -573,7 +621,7 @@ final class UsageStore: ObservableObject {
         guard UserDefaults.standard.string(forKey: Self.notifiedResetKey) != resetID else { return }
 
         if !previewMode {
-            celebration = Celebration(title: "Usage running low", subtitle: "\(constrained.remainingPercent)% remains in the tightest window", symbol: "exclamationmark.triangle.fill")
+            setCelebration(Celebration(title: MeterLocalization.text("Usage running low"), subtitle: MeterLocalization.format("%d%% remains in the tightest window", constrained.remainingPercent), symbol: "exclamationmark.triangle.fill"))
             dismissCelebration()
         }
 
@@ -582,8 +630,8 @@ final class UsageStore: ObservableObject {
         guard granted else { return }
 
         let content = UNMutableNotificationContent()
-        content.title = "Codex usage is running low"
-        content.body = "\(constrained.remainingPercent)% remains. \(ResetTimeFormatter.notificationText(for: constrained.resetsAt))"
+        content.title = MeterLocalization.text("Codex usage is running low")
+        content.body = MeterLocalization.format("%d%% remains. %@", constrained.remainingPercent, ResetTimeFormatter.notificationText(for: constrained.resetsAt))
         content.sound = .default
         try? await center.add(UNNotificationRequest(identifier: "codex-meter-low-\(resetID)", content: content, trigger: nil))
         UserDefaults.standard.set(resetID, forKey: Self.notifiedResetKey)
@@ -596,6 +644,19 @@ final class UsageStore: ObservableObject {
     }
 }
 
+private struct AccountMismatchError: LocalizedError {
+    let actualEmail: String
+    let expectedEmail: String
+
+    var errorDescription: String? {
+        MeterLocalization.format(
+            "Codex signed in as %@, not %@. Sign in again and choose the intended account.",
+            actualEmail,
+            expectedEmail
+        )
+    }
+}
+
 private func decodedDefaultID(from data: Data?) -> UUID? {
     guard let data,
           let decoded = try? JSONDecoder().decode([AccountProfile].self, from: data) else { return nil }
@@ -604,20 +665,21 @@ private func decodedDefaultID(from data: Data?) -> UUID? {
 
 enum ResetTimeFormatter {
     static func relativeText(for date: Date?, now: Date = Date()) -> String {
-        guard let date else { return "Reset time unavailable" }
-        if date <= now { return "Resetting now" }
+        guard let date else { return MeterLocalization.text("Reset time unavailable") }
+        if date <= now { return MeterLocalization.text("Resetting now") }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
-        return "Resets \(formatter.localizedString(for: date, relativeTo: now))"
+        formatter.locale = MeterLocalization.locale
+        return MeterLocalization.format("Resets %@", formatter.localizedString(for: date, relativeTo: now))
     }
 
     static func absoluteText(for date: Date?) -> String? {
         guard let date else { return nil }
-        return date.formatted(date: .abbreviated, time: .shortened)
+        return date.formatted(.dateTime.year().month(.abbreviated).day().hour().minute().locale(MeterLocalization.locale))
     }
 
     static func notificationText(for date: Date?) -> String {
-        guard let date else { return "The reset time is unavailable." }
-        return "It resets \(date.formatted(date: .omitted, time: .shortened))."
+        guard let date else { return MeterLocalization.text("The reset time is unavailable.") }
+        return MeterLocalization.format("It resets %@.", date.formatted(.dateTime.hour().minute().locale(MeterLocalization.locale)))
     }
 }

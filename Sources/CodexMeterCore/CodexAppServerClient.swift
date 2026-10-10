@@ -171,10 +171,10 @@ public actor CodexAppServerClient {
 
     public func diagnosticSummary() -> String {
         [
-            "Executable: \(executablePath ?? explicitExecutableURL?.path ?? "not resolved")",
-            "CODEX_HOME: \(codexHome == nil ? "default" : "isolated profile")",
-            "Protocol stage: \(protocolStage)",
-            "Process running: \(process?.isRunning == true ? "yes" : "no")"
+            MeterLocalization.format("Executable: %@", executablePath ?? explicitExecutableURL?.path ?? MeterLocalization.text("not resolved")),
+            MeterLocalization.format("CODEX_HOME: %@", MeterLocalization.text(codexHome == nil ? "default" : "isolated profile")),
+            MeterLocalization.format("Protocol stage: %@", MeterLocalization.text(protocolStage)),
+            MeterLocalization.format("Process running: %@", MeterLocalization.text(process?.isRunning == true ? "yes" : "no"))
         ].joined(separator: "\n")
     }
 
