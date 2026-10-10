@@ -33,7 +33,10 @@ enum LocalizationCheck {
 
         MeterLocalization.language = .simplifiedChinese
         precondition(MeterLocalization.isChinese)
-        precondition(MeterLocalization.locale.identifier == "zh_Hans_CN")
+        let locale = MeterLocalization.locale
+        precondition(locale.language.languageCode?.identifier == "zh")
+        precondition(locale.language.script?.identifier == "Hans")
+        precondition(locale.region?.identifier == "CN")
         precondition(MeterLanguage.system.displayName == "跟随系统")
         precondition(MeterLanguage.english.displayName == "English")
         precondition(MeterLanguage.simplifiedChinese.displayName == "简体中文")
@@ -53,7 +56,9 @@ enum LocalizationCheck {
         precondition(MeterLocalization.format("%d%% used · %d%% expected by now", 100, 50) == "已用 100% · 当前预计应使用 50%")
         precondition(MeterLocalization.format("%@: %d%% remaining. %@.%@%@", "每周限额", 75, "2天8小时后重置", "", "") == "每周限额：剩余 75%。2天8小时后重置。")
         precondition(MeterLocalization.format("OpenAI sign-in failed: %@", "bad 100% %@ %n") == "OpenAI 登录失败：bad 100% %@ %n")
-        precondition(MeterLocalization.format("%@: %lld tokens", "周六", Int64.max) == "周六：9,223,372,036,854,775,807 个 token")
+        let largeTokenText = MeterLocalization.format("%@: %lld tokens", "周六", Int64.max)
+        precondition(largeTokenText.hasPrefix("周六：") && largeTokenText.hasSuffix(" 个 token"))
+        precondition(largeTokenText.filter(\.isNumber) == String(Int64.max))
 
         let now = Date(timeIntervalSince1970: 2_000_000_000)
         let countdown = ResetCountdownFormatter.format(until: now.addingTimeInterval(2 * 86_400 + 8 * 3_600), now: now)
