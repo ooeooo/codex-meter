@@ -58,7 +58,7 @@ enum LocalizationCheck {
         precondition(MeterLocalization.format("OpenAI sign-in failed: %@", "bad 100% %@ %n") == "OpenAI 登录失败：bad 100% %@ %n")
         let largeTokenText = MeterLocalization.format("%@: %lld tokens", "周六", Int64.max)
         precondition(largeTokenText.hasPrefix("周六：") && largeTokenText.hasSuffix(" 个 token"))
-        precondition(largeTokenText.filter(\.isNumber) == String(Int64.max))
+        precondition(largeTokenText.filter { "0123456789".contains($0) } == String(Int64.max))
 
         let now = Date(timeIntervalSince1970: 2_000_000_000)
         let countdown = ResetCountdownFormatter.format(until: now.addingTimeInterval(2 * 86_400 + 8 * 3_600), now: now)
