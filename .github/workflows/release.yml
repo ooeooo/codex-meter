@@ -3,45 +3,72 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to release (for example, v1.5.0)
+        required: true
+        type: string
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   release:
     runs-on: macos-15
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
+      - name: Validate tag format
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo 'Release tags must use vMAJOR.MINOR.PATCH, for example v1.5.0.' >&2
+            exit 1
+          fi
       - uses: actions/checkout@v5
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+          persist-credentials: false
       - name: Verify release version
         run: |
           VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
-          test "v${VERSION}" = "$GITHUB_REF_NAME"
+          if [[ "v${VERSION}" != "$RELEASE_TAG" ]]; then
+            echo "Tag $RELEASE_TAG does not match Info.plist version v${VERSION}." >&2
+            exit 1
+          fi
+          TAG_COMMIT=$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")
+          test "$TAG_COMMIT" = "$(git rev-parse HEAD)"
+      - name: Parser checks and debug build
+        env:
+          SKIP_LIVE_CODEX_CHECK: "1"
+        run: ./scripts/test.sh
       - name: Build universal app
         run: ./scripts/build-app.sh dist
-      - name: Package app
-        run: |
-          mkdir "Codex Meter ${GITHUB_REF_NAME#v}"
-          ditto --norsrc --noextattr --noqtn --noacl \
-            "dist/Codex Meter.app" "Codex Meter ${GITHUB_REF_NAME#v}/Codex Meter.app"
-          cp "dist/codex-meter" "Codex Meter ${GITHUB_REF_NAME#v}/codex-meter"
-          cp Resources/INSTALL.txt "Codex Meter ${GITHUB_REF_NAME#v}/INSTALL.txt"
-          ditto -c -k --norsrc --noextattr --noqtn --noacl --keepParent \
-            "Codex Meter ${GITHUB_REF_NAME#v}" "Codex-Meter-${GITHUB_REF_NAME#v}.zip"
-      - name: Smoke-test release archive
-        run: |
-          mkdir release-check
-          unzip -q "Codex-Meter-${GITHUB_REF_NAME#v}.zip" -d release-check
-          ROOT="release-check/Codex Meter ${GITHUB_REF_NAME#v}"
-          lipo "$ROOT/Codex Meter.app/Contents/MacOS/CodexMeter" -verify_arch arm64 x86_64
-          lipo "$ROOT/codex-meter" -verify_arch arm64 x86_64
-          codesign --verify --deep --strict "$ROOT/Codex Meter.app"
-          codesign --verify --strict "$ROOT/codex-meter"
-          "$ROOT/codex-meter" --help
+      - name: Package and verify release archive
+        run: ./scripts/package-app.sh dist "${RELEASE_TAG#v}"
+      - name: Upload release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-meter-${{ env.RELEASE_TAG }}
+          path: |
+            dist/Codex-Meter-*.zip
+            dist/Codex-Meter-*.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            "Codex-Meter-${GITHUB_REF_NAME#v}.zip" \
-            --title "Codex Meter ${GITHUB_REF_NAME#v}" \
+          gh release create "$RELEASE_TAG" \
+            "dist/Codex-Meter-${RELEASE_TAG#v}.zip" \
+            "dist/Codex-Meter-${RELEASE_TAG#v}.zip.sha256" \
+            --verify-tag \
+            --title "Codex Meter ${RELEASE_TAG#v}" \
             --generate-notes

@@ -148,6 +148,8 @@ open "dist/Codex Meter.app"
 
 Run `./scripts/test.sh` without the environment variable when Codex is installed and signed in to include the live integration check.
 
+GitHub Actions can build the app without a local Mac. CI uploads downloadable development packages and also supports **Actions → CI → Run workflow**. Version tags trigger tested releases with ZIP downloads and SHA-256 checksums; existing tags can also be released manually. See [Build and release with GitHub Actions](docs/build-and-release.md) for instructions.
+
 ## Why open source?
 
 A usage meter should be easy to inspect and easy to trust. You can see exactly what Codex Meter runs, how it reads the percentage, what it stores, and what it does not touch.

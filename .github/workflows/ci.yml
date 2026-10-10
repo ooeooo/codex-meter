@@ -4,26 +4,41 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Report Swift toolchain
+        run: swift --version
       - name: Parser checks and debug build
         env:
           SKIP_LIVE_CODEX_CHECK: "1"
         run: ./scripts/test.sh
       - name: Build universal app
         run: ./scripts/build-app.sh dist
-      - name: Verify architectures and signature
+      - name: Package and verify development build
         run: |
-          file "dist/Codex Meter.app/Contents/MacOS/CodexMeter"
-          lipo "dist/Codex Meter.app/Contents/MacOS/CodexMeter" -verify_arch arm64 x86_64
-          lipo "dist/codex-meter" -verify_arch arm64 x86_64
-          codesign --verify --deep --strict "dist/Codex Meter.app"
-          codesign --verify --strict "dist/codex-meter"
-          "dist/codex-meter" --help
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+          ./scripts/package-app.sh dist "${VERSION}-ci-${GITHUB_RUN_NUMBER}-${GITHUB_SHA:0:7}"
+      - name: Upload development package
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-meter-macos-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            dist/Codex-Meter-*.zip
+            dist/Codex-Meter-*.zip.sha256
+          if-no-files-found: error
+          retention-days: 14

@@ -21,6 +21,8 @@ SKIP_LIVE_CODEX_CHECK=1 ./scripts/test.sh
 
 To run the live integration check, sign in to Codex and run `./scripts/test.sh` without `SKIP_LIVE_CODEX_CHECK`.
 
+If you do not have a Mac, use the macOS GitHub Actions runner to test and package changes. See [Build and release with GitHub Actions](docs/build-and-release.md) for manual builds, artifact downloads and versioned releases.
+
 ## Pull requests
 
 1. Explain the problem and why the change is needed.
