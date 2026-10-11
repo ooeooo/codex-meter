@@ -3,11 +3,18 @@ import Foundation
 public actor CodexAppServerClient {
     private let codexHome: URL?
     private let explicitExecutableURL: URL?
+    private let appBundleURLs: [URL]
     private var process: Process?
     private var input: FileHandle?
     private var readTask: Task<Void, Never>?
     private var nextID = 1
     private var initializationID: Int?
+    private var initialized = false
+    private var initializationError: CodexClientError?
+    private var sessionID = UUID()
+    private var lastExitStatus: Int32?
+    private var processDiagnostics = CodexProcessDiagnostics()
+    private var errorOutput: FileHandle?
     private var pendingReads: [Int: CheckedContinuation<RateLimitPayload, Error>] = [:]
     private var pendingAccountReads: [Int: CheckedContinuation<CodexAccount?, Error>] = [:]
     private var pendingLoginStarts: [Int: CheckedContinuation<CodexLoginSession, Error>] = [:]
@@ -18,39 +25,28 @@ public actor CodexAppServerClient {
     private var executablePath: String?
     private var protocolStage = "not started"
 
-    private var executableCandidates: [String] {
-        Self.executableCandidatePaths()
-    }
-
     public static func executableCandidatePaths(
         home: String = FileManager.default.homeDirectoryForCurrentUser.path,
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        appBundleURLs: [URL] = []
     ) -> [String] {
-        [
-            environment["CODEX_PATH"],
-            "/Applications/Codex.app/Contents/Resources/codex",
-            "/Applications/ChatGPT.app/Contents/Resources/codex",
-            "/opt/homebrew/bin/codex",
-            "/usr/local/bin/codex",
-            "\(home)/.local/bin/codex",
-            "\(home)/.npm-global/bin/codex",
-            "\(home)/.volta/bin/codex"
-        ].compactMap { $0 }
+        CodexExecutableLocator.candidatePaths(home: home, environment: environment, appBundleURLs: appBundleURLs)
     }
 
-    public static func locateExecutable() -> URL? {
-        let candidates = executableCandidatePaths()
-        return candidates.first(where: FileManager.default.isExecutableFile(atPath:)).map(URL.init(fileURLWithPath:))
+    public static func locateExecutable(appBundleURLs: [URL] = []) -> URL? {
+        CodexExecutableLocator.locate(appBundleURLs: appBundleURLs)
     }
 
     deinit {
         readTask?.cancel()
+        errorOutput?.readabilityHandler = nil
         process?.terminate()
     }
 
-    public init(codexHome: URL? = nil, executableURL: URL? = nil) {
+    public init(codexHome: URL? = nil, executableURL: URL? = nil, appBundleURLs: [URL] = []) {
         self.codexHome = codexHome
         self.explicitExecutableURL = executableURL
+        self.appBundleURLs = appBundleURLs
     }
 
     public func readRateLimits() async throws -> RateLimitPayload {
@@ -70,7 +66,7 @@ public actor CodexAppServerClient {
                 return
             }
             Task {
-                try? await Task.sleep(for: .seconds(12))
+                try? await Task.sleep(for: .seconds(30))
                 self.timeoutRead(id: id)
             }
         }
@@ -92,7 +88,7 @@ public actor CodexAppServerClient {
                 return
             }
             Task {
-                try? await Task.sleep(for: .seconds(12))
+                try? await Task.sleep(for: .seconds(30))
                 self.timeoutAccountRead(id: id)
             }
         }
@@ -114,7 +110,7 @@ public actor CodexAppServerClient {
                 return
             }
             Task {
-                try? await Task.sleep(for: .seconds(12))
+                try? await Task.sleep(for: .seconds(30))
                 self.timeoutLogout(id: id)
             }
         }
@@ -140,7 +136,7 @@ public actor CodexAppServerClient {
                 return
             }
             Task {
-                try? await Task.sleep(for: .seconds(12))
+                try? await Task.sleep(for: .seconds(30))
                 self.timeoutLoginStart(id: id)
             }
         }
@@ -160,6 +156,12 @@ public actor CodexAppServerClient {
     }
 
     public func stop() {
+        sessionID = UUID()
+        initialized = false
+        initializationID = nil
+        initializationError = nil
+        errorOutput?.readabilityHandler = nil
+        errorOutput = nil
         readTask?.cancel()
         readTask = nil
         input?.closeFile()
@@ -170,12 +172,23 @@ public actor CodexAppServerClient {
     }
 
     public func diagnosticSummary() -> String {
-        [
+        let inheritedHome = ProcessInfo.processInfo.environment["CODEX_HOME"].flatMap { $0.isEmpty ? nil : $0 }
+        let homeDescription = codexHome?.path ?? inheritedHome
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path
+        var lines = [
             MeterLocalization.format("Executable: %@", executablePath ?? explicitExecutableURL?.path ?? MeterLocalization.text("not resolved")),
-            MeterLocalization.format("CODEX_HOME: %@", MeterLocalization.text(codexHome == nil ? "default" : "isolated profile")),
+            MeterLocalization.format("CODEX_HOME: %@", homeDescription),
             MeterLocalization.format("Protocol stage: %@", MeterLocalization.text(protocolStage)),
             MeterLocalization.format("Process running: %@", MeterLocalization.text(process?.isRunning == true ? "yes" : "no"))
-        ].joined(separator: "\n")
+        ]
+        if let lastExitStatus {
+            lines.append(MeterLocalization.format("Process exit status: %d", lastExitStatus))
+        }
+        let stderr = processDiagnostics.summary()
+        if !stderr.isEmpty {
+            lines.append(MeterLocalization.format("Codex process errors:\n%@", stderr))
+        }
+        return CodexProcessDiagnostics.redact(lines.joined(separator: "\n"))
     }
 
     private func timeoutRead(id: Int) {
@@ -200,22 +213,47 @@ public actor CodexAppServerClient {
 
     private func start() throws {
         let executable = explicitExecutableURL?.path
-            ?? executableCandidates.first(where: FileManager.default.isExecutableFile(atPath:))
+            ?? Self.locateExecutable(appBundleURLs: appBundleURLs)?.path
         guard let executable else {
             throw CodexClientError.executableNotFound
         }
 
+        sessionID = UUID()
+        let session = sessionID
+        initialized = false
+        initializationID = nil
+        initializationError = nil
+        lastExitStatus = nil
+        processDiagnostics = CodexProcessDiagnostics()
+        let diagnostics = processDiagnostics
         executablePath = executable
         protocolStage = "starting app-server"
 
         let process = Process()
         let stdout = Pipe()
         let stdin = Pipe()
+        let stderr = Pipe()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = ["app-server"]
         process.standardOutput = stdout
         process.standardInput = stdin
-        process.standardError = FileHandle.nullDevice
+        process.standardError = stderr
+        stderr.fileHandleForReading.readabilityHandler = { handle in
+            do {
+                guard let data = try handle.read(upToCount: 4_096), !data.isEmpty else {
+                    handle.readabilityHandler = nil
+                    return
+                }
+                diagnostics.append(data)
+            } catch {
+                handle.readabilityHandler = nil
+            }
+        }
+        errorOutput = stderr.fileHandleForReading
+        process.terminationHandler = { [weak self] ended in
+            let status = ended.terminationStatus
+            Task { await self?.recordExitStatus(session: session, status: status) }
+        }
         var environment = ProcessInfo.processInfo.environment
         let inheritedPath = environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
         let executableDirectory = URL(fileURLWithPath: executable).deletingLastPathComponent().path
@@ -226,7 +264,11 @@ public actor CodexAppServerClient {
         }
         process.environment = environment
 
-        do { try process.run() } catch { throw CodexClientError.launch(error.localizedDescription) }
+        do { try process.run() } catch {
+            stderr.fileHandleForReading.readabilityHandler = nil
+            errorOutput = nil
+            throw CodexClientError.launch(error.localizedDescription)
+        }
 
         self.process = process
         self.input = stdin.fileHandleForWriting
@@ -234,16 +276,19 @@ public actor CodexAppServerClient {
             do {
                 for try await line in stdout.fileHandleForReading.bytes.lines {
                     guard let data = line.data(using: .utf8) else { continue }
-                    await self?.handle(data)
+                    await self?.handle(data, session: session)
                 }
-                await self?.connectionEnded()
+                await self?.connectionEnded(session: session)
             } catch {
-                await self?.connectionEnded()
+                await self?.connectionEnded(session: session)
             }
         }
     }
 
     private func ensureInitialized() async throws {
+        if initialized { return }
+        if let failure = initializationError { throw failure }
+        let session = sessionID
         if initializationID == nil {
             let id = nextID
             nextID += 1
@@ -252,12 +297,16 @@ public actor CodexAppServerClient {
             try send([
                 "method": "initialize",
                 "id": id,
-                "params": ["clientInfo": ["name": "codex_meter", "title": "Codex Meter", "version": "1.0.0"]]
+                "params": ["clientInfo": ["name": "codex_meter", "title": "Codex Meter", "version": "1.6.1"]]
             ])
         }
 
-        let deadline = ContinuousClock.now + .seconds(5)
-        while initializationID != nil {
+        let deadline = ContinuousClock.now + .seconds(30)
+        while !initialized {
+            try Task.checkCancellation()
+            guard session == sessionID else { throw CodexClientError.disconnected }
+            if let failure = initializationError { throw failure }
+            guard process?.isRunning == true else { throw CodexClientError.disconnected }
             if ContinuousClock.now >= deadline {
                 stop()
                 throw CodexClientError.timedOut
@@ -273,13 +322,29 @@ public actor CodexAppServerClient {
         do { try input.write(contentsOf: data) } catch { throw CodexClientError.disconnected }
     }
 
-    private func handle(_ data: Data) {
+    private func handle(_ data: Data, session: UUID) {
+        guard session == sessionID else { return }
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
 
         if let id = (root["id"] as? NSNumber)?.intValue, id == initializationID {
             initializationID = nil
-            protocolStage = "initialized"
-            try? send(["method": "initialized", "params": [:]])
+            if let error = responseError(root) {
+                initializationError = error
+                protocolStage = "initialize rejected"
+                return
+            }
+            guard root["result"] is [String: Any] else {
+                initializationError = .invalidResponse
+                protocolStage = "initialize rejected"
+                return
+            }
+            do {
+                try send(["method": "initialized", "params": [:]])
+                initialized = true
+                protocolStage = "initialized"
+            } catch {
+                initializationError = .disconnected
+            }
             return
         }
 
@@ -347,7 +412,15 @@ public actor CodexAppServerClient {
         if let payload = try? RateLimitParser.parseNotification(data) { latestSnapshot = payload }
     }
 
-    private func connectionEnded() {
+    private func recordExitStatus(session: UUID, status: Int32) {
+        guard session == sessionID else { return }
+        lastExitStatus = status
+    }
+
+    private func connectionEnded(session: UUID) {
+        guard session == sessionID else { return }
+        if let process, !process.isRunning { lastExitStatus = process.terminationStatus }
+        initialized = false
         process = nil
         input = nil
         initializationID = nil

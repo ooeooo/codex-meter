@@ -34,11 +34,17 @@ public struct RateLimitWindow: Equatable, Sendable, Codable {
     public var remainingPercent: Int { max(0, min(100, 100 - usedPercent)) }
 
     public var displayName: String {
-        guard let durationMinutes else { return MeterLocalization.text("Usage window") }
-        if durationMinutes <= 360 { return MeterLocalization.text("5-hour limit") }
-        if durationMinutes >= 9_000 { return MeterLocalization.text("Weekly limit") }
-        if durationMinutes >= 1_200 { return MeterLocalization.text("Daily limit") }
-        return MeterLocalization.format("%lld-hour limit", Int64(durationMinutes / 60))
+        guard let durationMinutes, durationMinutes > 0 else { return MeterLocalization.text("Usage window") }
+        switch durationMinutes {
+        case 300: return MeterLocalization.text("5-hour limit")
+        case 1_440: return MeterLocalization.text("Daily limit")
+        case 10_080: return MeterLocalization.text("Weekly limit")
+        default:
+            if durationMinutes.isMultiple(of: 60) {
+                return MeterLocalization.format("%lld-hour limit", Int64(durationMinutes / 60))
+            }
+            return MeterLocalization.format("%lld-minute limit", Int64(durationMinutes))
+        }
     }
 }
 
@@ -215,8 +221,10 @@ public enum RateLimitParser {
     private static func selectSnapshot(from result: [String: Any]) -> [String: Any]? {
         if let byID = result["rateLimitsByLimitId"] as? [String: Any] {
             if let codex = byID["codex"] as? [String: Any] { return codex }
-            if let first = byID.values.compactMap({ $0 as? [String: Any] }).first { return first }
         }
+        // App-server chooses the backward-compatible account bucket. A map
+        // without "codex" can contain additional model/product quotas; taking
+        // its first value would display an arbitrary unrelated allowance.
         return result["rateLimits"] as? [String: Any]
     }
 

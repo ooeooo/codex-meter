@@ -87,6 +87,11 @@ public enum MeterLocalization {
     }
 
     private static let simplifiedChinese: [String: String] = [
+        "%lld-minute limit": "%lld 分钟限额",
+        "Operation failed": "操作失败",
+        "initialize rejected": "初始化被拒绝",
+        "Process exit status: %d": "进程退出码：%d",
+        "Codex process errors:\n%@": "Codex 进程错误：\n%@",
         " Resets %@.": " 于 %@ 重置。",
         " Weekly pace: %@.": " 每周用量进度：%@。",
         "%@ %lld saved": "已节省 %@ %lld",

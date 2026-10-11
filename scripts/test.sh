@@ -38,6 +38,8 @@ swiftc \
   -parse-as-library \
   "$ROOT/Sources/CodexMeterCore/RateLimitModels.swift" \
   "$ROOT/Sources/CodexMeterCore/CodexAppServerClient.swift" \
+  "$ROOT/Sources/CodexMeterCore/CodexExecutableLocator.swift" \
+  "$ROOT/Sources/CodexMeterCore/CodexProcessDiagnostics.swift" \
   "$ROOT/Tests/AppServerHandshakeCheck.swift" \
   -o "$TMP/app-server-handshake-check"
 "$TMP/app-server-handshake-check"
@@ -47,6 +49,8 @@ if [[ "${SKIP_LIVE_CODEX_CHECK:-0}" != "1" ]]; then
     "$ROOT/Sources/CodexMeterCore/MeterLocalization.swift" \
     "$ROOT/Sources/CodexMeterCore/RateLimitModels.swift" \
     "$ROOT/Sources/CodexMeterCore/CodexAppServerClient.swift" \
+    "$ROOT/Sources/CodexMeterCore/CodexExecutableLocator.swift" \
+    "$ROOT/Sources/CodexMeterCore/CodexProcessDiagnostics.swift" \
     "$ROOT/Tests/LiveCheck.swift" \
     -o "$TMP/live-check"
   "$TMP/live-check"
@@ -58,9 +62,25 @@ swiftc \
   "$ROOT/Sources/CodexMeterCore/RateLimitModels.swift" \
   "$ROOT/Sources/CodexMeterCore/LocalActivity.swift" \
   "$ROOT/Sources/CodexMeterCore/CodexAppServerClient.swift" \
+  "$ROOT/Sources/CodexMeterCore/CodexExecutableLocator.swift" \
+  "$ROOT/Sources/CodexMeterCore/CodexProcessDiagnostics.swift" \
   "$ROOT/Tests/LocalizationCheck.swift" \
   -o "$TMP/localization-check"
 "$TMP/localization-check"
+
+swiftc \
+  -parse-as-library \
+  "$ROOT/Sources/CodexMeterCore/CodexExecutableLocator.swift" \
+  "$ROOT/Tests/ExecutableLocatorCheck.swift" \
+  -o "$TMP/executable-locator-check"
+"$TMP/executable-locator-check"
+
+swiftc \
+  -parse-as-library \
+  "$ROOT/Sources/CodexMeterCore/CodexProcessDiagnostics.swift" \
+  "$ROOT/Tests/ProcessDiagnosticsCheck.swift" \
+  -o "$TMP/process-diagnostics-check"
+"$TMP/process-diagnostics-check"
 
 swift build --package-path "$ROOT"
 "$ROOT/.build/debug/codex-meter" --help >/dev/null

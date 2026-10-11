@@ -68,6 +68,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.updateStatusItem() }
             .store(in: &cancellables)
+        Timer.publish(every: 30, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in self?.updateStatusItem() }
+            .store(in: &cancellables)
+        if !previewMode {
+            NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)
+                .receive(on: RunLoop.main)
+                .sink { [weak self] _ in
+                    guard let self else { return }
+                    self.updateStatusItem()
+                    Task { await self.store.refresh() }
+                }
+                .store(in: &cancellables)
+        }
         updateStatusItem()
     }
 

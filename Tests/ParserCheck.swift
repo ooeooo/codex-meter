@@ -6,6 +6,7 @@ import CodexMeterCore
 @main
 struct ParserCheck {
     static func main() throws {
+        MeterLocalization.language = .english
         let standard = #"{"id":2,"result":{"rateLimits":{"limitId":"codex","planType":"plus","primary":{"usedPercent":37,"windowDurationMins":300,"resetsAt":2000000000},"secondary":{"usedPercent":81,"windowDurationMins":10080,"resetsAt":2000100000}}}}"#
         let payload = try require(RateLimitParser.parseResponse(Data(standard.utf8), now: Date(timeIntervalSince1970: 1)))
         precondition(payload.snapshot.primary?.remainingPercent == 63)
@@ -23,6 +24,52 @@ struct ParserCheck {
         let buckets = #"{"id":2,"result":{"rateLimits":{},"rateLimitsByLimitId":{"other":{"primary":{"usedPercent":4}},"codex":{"primary":{"usedPercent":22}}}}}"#
         let selected = try require(RateLimitParser.parseResponse(Data(buckets.utf8)))
         precondition(selected.snapshot.primary?.remainingPercent == 78)
+
+        // When a server's map has no "codex" entry, use the server-selected
+        // historical bucket rather than dictionary order or another model.
+        let canonicalFallback = #"{"id":2,"result":{"rateLimits":{"limitId":"main-default","planType":"pro","primary":{"usedPercent":20,"windowDurationMins":300,"resetsAt":2000000000}},"rateLimitsByLimitId":{"codex_other":{"limitId":"codex_other","primary":{"usedPercent":88,"windowDurationMins":30}}},"rateLimitResetCredits":{"availableCount":3}}}"#
+        let canonical = try require(RateLimitParser.parseResponse(Data(canonicalFallback.utf8)))
+        precondition(canonical.snapshot.limitID == "main-default")
+        precondition(canonical.snapshot.planType == "pro")
+        precondition(canonical.snapshot.primary?.remainingPercent == 80)
+        precondition(canonical.snapshot.primary?.resetsAt == Date(timeIntervalSince1970: 2_000_000_000))
+        precondition(canonical.availableResetCredits == 3)
+
+        let multiBucketFallback = #"{"id":2,"result":{"rateLimits":{"limitId":"main-default","primary":{"usedPercent":20}},"rateLimitsByLimitId":{"main-default":{"limitId":"main-default","primary":{"usedPercent":20}},"codex_other":{"limitId":"codex_other","primary":{"usedPercent":88}}}}}"#
+        let multiBucket = try require(RateLimitParser.parseResponse(Data(multiBucketFallback.utf8)))
+        precondition(multiBucket.snapshot.limitID == "main-default")
+        precondition(multiBucket.snapshot.mostConstrainedRemaining == 80)
+
+        let codexMapOnly = #"{"id":2,"result":{"rateLimitsByLimitId":{"codex":{"limitId":"codex","secondary":{"usedPercent":99,"windowDurationMins":10080}}}}}"#
+        let codexOnly = try require(RateLimitParser.parseResponse(Data(codexMapOnly.utf8)))
+        precondition(codexOnly.snapshot.mostConstrainedRemaining == 1)
+
+        let unrelatedMapOnly = #"{"id":2,"result":{"rateLimitsByLimitId":{"codex_other":{"primary":{"usedPercent":88}}}}}"#
+        let unrelatedOnly = try RateLimitParser.parseResponse(Data(unrelatedMapOnly.utf8))
+        precondition(unrelatedOnly == nil)
+
+        // Quota periods are backend-defined; nonstandard periods must not be
+        // presented as a five-hour, daily, or weekly allowance.
+        let durations: [(Int?, String)] = [
+            (nil, "Usage window"),
+            (0, "Usage window"),
+            (-60, "Usage window"),
+            (60, "1-hour limit"),
+            (120, "2-hour limit"),
+            (300, "5-hour limit"),
+            (360, "6-hour limit"),
+            (480, "8-hour limit"),
+            (45, "45-minute limit"),
+            (1_200, "20-hour limit"),
+            (1_440, "Daily limit"),
+            (9_000, "150-hour limit"),
+            (10_080, "Weekly limit")
+        ]
+        for (minutes, expectedLabel) in durations {
+            let window = RateLimitWindow(usedPercent: 20, resetsAt: nil, durationMinutes: minutes)
+            precondition(window.displayName == expectedLabel)
+            precondition(window.remainingPercent == 80)
+        }
 
         let clamped = #"{"id":2,"result":{"rateLimits":{"primary":{"usedPercent":125},"secondary":{"usedPercent":-4}}}}"#
         let clampedPayload = try require(RateLimitParser.parseResponse(Data(clamped.utf8)))

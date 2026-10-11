@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.1 — 2026-10-11
+
+- Fixed quota bucket selection when modern servers return multiple limit IDs without a `codex` key; use the server’s canonical quota instead of an arbitrary product bucket.
+- Find the current or registered desktop application, including renamed apps and user installations; prefer the unified ChatGPT desktop, verify its Codex bundle identity, and support absolute PATH locations.
+- Report actual quota window durations, reject failed initialization, and protect replacement clients from callbacks belonging to older processes.
+- Keep operation errors separate from quota failures, protect account switches against old refresh results, and prevent notification permission prompts from blocking polling.
+- Refresh stale menu-bar state regularly and retry after wake; retain bounded, redacted process diagnostics and empty-response diagnostics for troubleshooting.
+- Added official-protocol fixtures, executable discovery checks, initialization/reconnection checks and diagnostic privacy checks.
+
 ## 1.6.0 — 2026-10-10
 
 - Added an original macOS application icon, generated as ICNS with native system tools at all standard and Retina sizes; included PNG and ICO source assets.

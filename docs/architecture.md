@@ -15,9 +15,13 @@ Account deletion removes the selected non-default profile only after a native co
 
 The desktop Codex app uses the default Codex authentication profile. A confirmed **Meter + Codex** switch closes the desktop app, creates a default-home app-server connection, calls the documented `account/logout` method, starts `account/login/start` with ChatGPT browser authentication, waits for `account/login/completed`, verifies the result with `account/read`, and relaunches Codex. This is deliberately a fresh OAuth flow: Codex Meter does not copy tokens between profiles, collect passwords or MFA codes, call internal token-login modes, or request Accessibility control.
 
-The client performs the required `initialize` handshake before calling `account/rateLimits/read`. It prefers the `codex` entry in the multi-bucket response and falls back to the backward-compatible single-bucket response. Percentages are clamped to 0–100, and the menu bar displays the lowest remaining percentage across returned windows.
+The client performs the required `initialize` handshake before calling `account/rateLimits/read`. It prefers the `codex` entry in the multi-bucket response and falls back to the server’s canonical backward-compatible `rateLimits` snapshot. It never selects an arbitrary unrelated quota bucket. Initialization errors are propagated, and each process and account handoff has a generation guard so old callbacks cannot overwrite a replacement connection. Percentages are clamped to 0–100, and the menu bar displays the lowest remaining percentage across returned windows.
 
 The app intentionally does not consume rate-limit reset credits or expose conversation, configuration, or usage-changing methods. Its only authentication writes are explicit user-confirmed logout/login operations during desktop account switching.
+
+The executable locator checks explicit `CODEX_PATH`, active/registered official desktop bundles, system and user application directories, absolute inherited `PATH` entries, then common CLI directories. Desktop bundles must have the `com.openai.codex` identifier; the classic ChatGPT app is not a Codex service. The client preserves Codex’s configured credential storage and does not inspect credentials. Diagnostics include the effective `CODEX_HOME`, protocol stage, process exit code and a bounded redacted stderr summary.
+
+Quota errors, account operation errors and local history errors have separate display states. Notification authorization does not block polling. The status item checks data age every 30 seconds and refreshes quota after macOS wakes.
 
 ## Local activity
 

@@ -46,6 +46,7 @@ final class UsageStore: ObservableObject {
     @Published private(set) var payload: RateLimitPayload?
     @Published private(set) var isRefreshing = false
     @Published private(set) var errorMessage: String?
+    @Published private(set) var operationError: String?
     @Published private(set) var activity: LocalActivitySnapshot?
     @Published private(set) var activityError: String?
     @Published var language: MeterLanguage {
@@ -77,15 +78,18 @@ final class UsageStore: ObservableObject {
     @Published private(set) var accountSwitchStatus: String?
 
     private var client: CodexAppServerClient
+    private var clientGeneration = UUID()
     private let activityScanner = LocalActivityScanner()
     private let previewMode: Bool
     private var pollingTask: Task<Void, Never>?
     private var activityPollingTask: Task<Void, Never>?
     private var loginTasks: [UUID: Task<Void, Never>] = [:]
+    private var pendingNotificationIDs = Set<String>()
     private var lastUsageDiagnostics: String?
     // Retain message sources for language changes; renderers capture local values,
     // rather than this store, so keeping a message cannot create a retain cycle.
     private var errorMessageRenderer: (() -> String?)?
+    private var operationErrorRenderer: (() -> String?)?
     private var activityErrorRenderer: (() -> String?)?
     private var accountSwitchStatusRenderer: (() -> String?)?
     private var celebrationRenderer: (() -> Celebration?)?
@@ -128,7 +132,7 @@ final class UsageStore: ObservableObject {
         self.previewMode = previewMode
         self.accounts = loadedAccounts
         self.activeAccountID = chosenAccountID
-        self.client = CodexAppServerClient(codexHome: loadedAccounts.first(where: { $0.id == chosenAccountID })?.homeURL)
+        self.client = Self.makeClient(codexHome: loadedAccounts.first(where: { $0.id == chosenAccountID })?.homeURL)
         UserDefaults.standard.set(try? JSONEncoder().encode(loadedAccounts), forKey: Self.accountsKey)
         UserDefaults.standard.set(chosenAccountID.uuidString, forKey: Self.activeAccountKey)
         let saved = UserDefaults.standard.integer(forKey: Self.thresholdKey)
@@ -212,6 +216,11 @@ final class UsageStore: ObservableObject {
         errorMessage = render()
     }
 
+    private func setOperationError(_ render: @autoclosure @escaping () -> String?) {
+        operationErrorRenderer = render
+        operationError = render()
+    }
+
     private func setActivityError(_ render: @autoclosure @escaping () -> String?) {
         activityErrorRenderer = render
         activityError = render()
@@ -229,9 +238,24 @@ final class UsageStore: ObservableObject {
 
     private func renderLocalizedMessages() {
         errorMessage = errorMessageRenderer?()
+        operationError = operationErrorRenderer?()
         activityError = activityErrorRenderer?()
         accountSwitchStatus = accountSwitchStatusRenderer?()
         celebration = celebrationRenderer?()
+    }
+
+    private static func makeClient(codexHome: URL? = nil) -> CodexAppServerClient {
+        let runningApps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.codex")
+            .compactMap(\.bundleURL)
+        let registeredApp = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex")
+        return CodexAppServerClient(
+            codexHome: codexHome,
+            appBundleURLs: runningApps + [registeredApp].compactMap { $0 }
+        )
+    }
+
+    private func isCurrentRequest(client requestClient: CodexAppServerClient, accountID: UUID, generation: UUID) -> Bool {
+        client === requestClient && activeAccountID == accountID && clientGeneration == generation
     }
 
     func start() {
@@ -257,12 +281,17 @@ final class UsageStore: ObservableObject {
     }
 
     func refreshActivity() async {
+        let generation = clientGeneration
+        let accountID = activeAccountID
         do {
             let previous = activity
-            activity = try await activityScanner.scan(days: 7)
+            let snapshot = try await activityScanner.scan(days: 7)
+            guard clientGeneration == generation, activeAccountID == accountID else { return }
+            activity = snapshot
             setActivityError(nil)
             detectActivityMilestones(previous: previous, current: activity)
         } catch {
+            guard clientGeneration == generation, activeAccountID == accountID else { return }
             activity = nil
             setActivityError((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
         }
@@ -270,20 +299,39 @@ final class UsageStore: ObservableObject {
 
     func refresh() async {
         guard !isRefreshing else { return }
+        let requestClient = client
+        let generation = clientGeneration
+        let accountID = activeAccountID
         isRefreshing = true
-        defer { isRefreshing = false }
+        defer {
+            if isCurrentRequest(client: requestClient, accountID: accountID, generation: generation) {
+                isRefreshing = false
+            }
+        }
         do {
-            let newPayload = try await client.readRateLimits()
+            let newPayload = try await requestClient.readRateLimits()
+            guard isCurrentRequest(client: requestClient, accountID: accountID, generation: generation) else { return }
             let previous = payload
             payload = newPayload
             setErrorMessage(newPayload.snapshot.windows.isEmpty ? MeterLocalization.text("No Codex rate-limit windows were returned for this account.") : nil)
-            if errorMessage == nil { lastUsageDiagnostics = nil }
-            await notifyIfNeeded(newPayload)
+            if newPayload.snapshot.windows.isEmpty {
+                let diagnostics = await requestClient.diagnosticSummary()
+                guard isCurrentRequest(client: requestClient, accountID: accountID, generation: generation) else { return }
+                lastUsageDiagnostics = diagnostics
+                return
+            }
+            lastUsageDiagnostics = nil
             detectBankedResetMilestone(previous: previous, current: newPayload)
+            Task { [weak self] in
+                await self?.notifyIfNeeded(newPayload, accountID: accountID, generation: generation)
+            }
         } catch {
+            guard isCurrentRequest(client: requestClient, accountID: accountID, generation: generation) else { return }
             setErrorMessage((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
-            lastUsageDiagnostics = await client.diagnosticSummary()
-            await client.stop()
+            let diagnostics = await requestClient.diagnosticSummary()
+            guard isCurrentRequest(client: requestClient, accountID: accountID, generation: generation) else { return }
+            lastUsageDiagnostics = diagnostics
+            await requestClient.stop()
         }
     }
 
@@ -299,20 +347,22 @@ final class UsageStore: ObservableObject {
             lastUsageDiagnostics ?? MeterLocalization.text("Protocol diagnostics: unavailable")
         ].joined(separator: "\n")
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        NSPasteboard.general.setString(CodexProcessDiagnostics.redact(text), forType: .string)
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
         guard #available(macOS 13.0, *) else { return }
+        setOperationError(nil)
         do {
             if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
         } catch {
-            setErrorMessage(MeterLocalization.format("Launch at login could not be changed: %@", error.localizedDescription))
+            setOperationError(MeterLocalization.format("Launch at login could not be changed: %@", error.localizedDescription))
         }
         launchAtLogin = SMAppService.mainApp.status == .enabled
     }
 
     func openCodex() {
+        setOperationError(nil)
         let settingsURL = URL(string: "codex://settings")
         if let running = NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.codex").first {
             running.activate(options: [.activateAllWindows])
@@ -322,13 +372,13 @@ final class UsageStore: ObservableObject {
         let discoveredURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex")
         let fallbackURL = URL(fileURLWithPath: "/Applications/ChatGPT.app")
         guard let appURL = discoveredURL ?? (FileManager.default.fileExists(atPath: fallbackURL.path) ? fallbackURL : nil) else {
-            setErrorMessage(MeterLocalization.text("Codex is not installed in /Applications."))
+            setOperationError(MeterLocalization.text("Codex is not installed in /Applications."))
             return
         }
         NSWorkspace.shared.openApplication(at: appURL, configuration: .init()) { [weak self] _, error in
             Task { @MainActor in
                 if let error {
-                    self?.setErrorMessage(MeterLocalization.format("Codex could not be opened: %@", error.localizedDescription))
+                    self?.setOperationError(MeterLocalization.format("Codex could not be opened: %@", error.localizedDescription))
                 } else if let settingsURL {
                     _ = NSWorkspace.shared.open(settingsURL)
                 }
@@ -367,16 +417,25 @@ final class UsageStore: ObservableObject {
     }
 
     private func switchMeterAccount(to id: UUID) {
-        guard accounts.contains(where: { $0.id == id }), id != activeAccountID else { return }
+        guard let profile = accounts.first(where: { $0.id == id }), id != activeAccountID else { return }
         pollingTask?.cancel()
         activityPollingTask?.cancel()
+        let previousClient = client
+        let generation = UUID()
+        clientGeneration = generation
+        activeAccountID = id
+        let nextClient = Self.makeClient(codexHome: profile.homeURL)
+        client = nextClient
+        payload = nil
+        activity = nil
+        setErrorMessage(nil)
+        setOperationError(nil)
+        setActivityError(nil)
+        lastUsageDiagnostics = nil
+        isRefreshing = false
         Task {
-            await client.stop()
-            let profile = accounts.first(where: { $0.id == id })
-            activeAccountID = id
-            client = CodexAppServerClient(codexHome: profile?.homeURL)
-            payload = nil
-            activity = nil
+            await previousClient.stop()
+            guard isCurrentRequest(client: nextClient, accountID: id, generation: generation) else { return }
             start()
         }
     }
@@ -393,6 +452,7 @@ final class UsageStore: ObservableObject {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
+        setOperationError(nil)
         let id = UUID()
         let home = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex-meter", isDirectory: true)
@@ -409,7 +469,7 @@ final class UsageStore: ObservableObject {
             persistAccounts()
             startLogin(for: profile)
         } catch {
-            setErrorMessage(MeterLocalization.format("The account profile could not be created: %@", error.localizedDescription))
+            setOperationError(MeterLocalization.format("The account profile could not be created: %@", error.localizedDescription))
         }
     }
 
@@ -428,43 +488,53 @@ final class UsageStore: ObservableObject {
         alert.addButton(withTitle: MeterLocalization.text("Cancel"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
+        setOperationError(nil)
+        let deletionClient = client
         if wasActive {
             pollingTask?.cancel()
             activityPollingTask?.cancel()
+            clientGeneration = UUID()
+            payload = nil
+            activity = nil
+            setErrorMessage(nil)
+            setActivityError(nil)
+            lastUsageDiagnostics = nil
+            isRefreshing = false
         }
+        let deletionGeneration = clientGeneration
         Task {
-            if wasActive { await client.stop() }
+            if wasActive { await deletionClient.stop() }
             do {
                 loginTasks.removeValue(forKey: profile.id)?.cancel()
                 try AccountProfileStorage.removeLocalProfile(at: home)
                 accounts.removeAll { $0.id == profile.id }
                 persistAccounts()
-                if wasActive, let fallback = accounts.first {
-                    activeAccountID = fallback.id
-                    client = CodexAppServerClient(codexHome: fallback.homeURL)
-                    payload = nil
-                    activity = nil
-                    start()
+                if wasActive,
+                   isCurrentRequest(client: deletionClient, accountID: profile.id, generation: deletionGeneration),
+                   let fallback = accounts.first {
+                    switchMeterAccount(to: fallback.id)
                 }
                 setCelebration(Celebration(title: MeterLocalization.text("Account removed"), subtitle: MeterLocalization.text("Local credentials were deleted"), symbol: "trash"))
                 dismissCelebration()
             } catch {
-                if wasActive {
-                    client = CodexAppServerClient(codexHome: profile.homeURL)
+                if wasActive, isCurrentRequest(client: deletionClient, accountID: profile.id, generation: deletionGeneration) {
+                    clientGeneration = UUID()
+                    client = Self.makeClient(codexHome: profile.homeURL)
+                    isRefreshing = false
                     start()
                 }
-                setErrorMessage(MeterLocalization.format("The local account could not be deleted: %@", error.localizedDescription))
+                setOperationError(MeterLocalization.format("The local account could not be deleted: %@", error.localizedDescription))
             }
         }
     }
 
     private func startLogin(for profile: AccountProfile) {
         guard let home = profile.homeURL else { return }
-        setErrorMessage(nil)
+        setOperationError(nil)
         loginTasks[profile.id]?.cancel()
         loginTasks[profile.id] = Task { [weak self] in
             guard let self else { return }
-            let loginClient = CodexAppServerClient(codexHome: home)
+            let loginClient = Self.makeClient(codexHome: home)
             do {
                 let login = try await loginClient.startChatGPTLogin()
                 guard NSWorkspace.shared.open(login.authorizationURL) else {
@@ -491,7 +561,7 @@ final class UsageStore: ObservableObject {
                 self.accounts.removeAll { $0.id == profile.id }
                 self.persistAccounts()
                 try? AccountProfileStorage.removeLocalProfile(at: home)
-                self.setErrorMessage(MeterLocalization.format("OpenAI sign-in failed: %@", (error as? LocalizedError)?.errorDescription ?? error.localizedDescription))
+                self.setOperationError(MeterLocalization.format("OpenAI sign-in failed: %@", (error as? LocalizedError)?.errorDescription ?? error.localizedDescription))
             }
         }
     }
@@ -543,14 +613,14 @@ final class UsageStore: ObservableObject {
         guard !isSwitchingCodexAccount else { return }
         isSwitchingCodexAccount = true
         setAccountSwitchStatus(MeterLocalization.text("Signing Codex out…"))
-        setErrorMessage(nil)
+        setOperationError(nil)
 
-        let desktopClient = CodexAppServerClient()
+        let desktopClient = Self.makeClient()
         do {
             var expectedEmail = profile.email
             if expectedEmail == nil, let home = profile.homeURL {
                 setAccountSwitchStatus(MeterLocalization.format("Checking %@…", profile.name))
-                let profileClient = CodexAppServerClient(codexHome: home)
+                let profileClient = Self.makeClient(codexHome: home)
                 if let account = try? await profileClient.readAccount() {
                     expectedEmail = account.email
                     if let index = accounts.firstIndex(where: { $0.id == profile.id }) {
@@ -590,8 +660,8 @@ final class UsageStore: ObservableObject {
             await desktopClient.stop()
             setAccountSwitchStatus(nil)
             isSwitchingCodexAccount = false
-            setErrorMessage(MeterLocalization.format("Codex account switch failed: %@", (error as? LocalizedError)?.errorDescription ?? error.localizedDescription))
             openCodex()
+            setOperationError(MeterLocalization.format("Codex account switch failed: %@", (error as? LocalizedError)?.errorDescription ?? error.localizedDescription))
         }
     }
 
@@ -611,14 +681,17 @@ final class UsageStore: ObservableObject {
         Task { try? await Task.sleep(for: .seconds(4)); setCelebration(nil) }
     }
 
-    private func notifyIfNeeded(_ payload: RateLimitPayload) async {
-        guard let constrained = payload.snapshot.windows.min(by: { $0.remainingPercent < $1.remainingPercent }),
+    private func notifyIfNeeded(_ payload: RateLimitPayload, accountID: UUID, generation: UUID) async {
+        guard clientGeneration == generation, activeAccountID == accountID,
+              let constrained = payload.snapshot.windows.min(by: { $0.remainingPercent < $1.remainingPercent }),
               constrained.remainingPercent <= alertThreshold else { return }
 
         let fallbackBucket = Int(Date().timeIntervalSince1970 / 86_400)
         let resetComponent = constrained.resetsAt.map { Int($0.timeIntervalSince1970) } ?? fallbackBucket
-        let resetID = "\(constrained.durationMinutes ?? 0)-\(resetComponent)-\(alertThreshold)"
-        guard UserDefaults.standard.string(forKey: Self.notifiedResetKey) != resetID else { return }
+        let resetID = "\(accountID.uuidString)-\(constrained.durationMinutes ?? 0)-\(resetComponent)-\(alertThreshold)"
+        guard UserDefaults.standard.string(forKey: Self.notifiedResetKey) != resetID,
+              pendingNotificationIDs.insert(resetID).inserted else { return }
+        defer { pendingNotificationIDs.remove(resetID) }
 
         if !previewMode {
             setCelebration(Celebration(title: MeterLocalization.text("Usage running low"), subtitle: MeterLocalization.format("%d%% remains in the tightest window", constrained.remainingPercent), symbol: "exclamationmark.triangle.fill"))
@@ -627,13 +700,14 @@ final class UsageStore: ObservableObject {
 
         let center = UNUserNotificationCenter.current()
         let granted = (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
-        guard granted else { return }
+        guard granted, clientGeneration == generation, activeAccountID == accountID else { return }
 
         let content = UNMutableNotificationContent()
         content.title = MeterLocalization.text("Codex usage is running low")
         content.body = MeterLocalization.format("%d%% remains. %@", constrained.remainingPercent, ResetTimeFormatter.notificationText(for: constrained.resetsAt))
         content.sound = .default
         try? await center.add(UNNotificationRequest(identifier: "codex-meter-low-\(resetID)", content: content, trigger: nil))
+        guard clientGeneration == generation, activeAccountID == accountID else { return }
         UserDefaults.standard.set(resetID, forKey: Self.notifiedResetKey)
     }
 

@@ -36,6 +36,9 @@ struct MeterView: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(Color.white.opacity(colorScheme == .dark ? 0.12 : 0.42), lineWidth: 0.75)
         }
+        .onChange(of: store.operationError) { error in
+            if error != nil { settingsExpanded = true }
+        }
     }
 
     private var header: some View {
@@ -250,6 +253,20 @@ struct MeterView: View {
 
     private var footer: some View {
         VStack(spacing: 10) {
+            if let error = store.operationError {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(MeterLocalization.text("Operation failed"))
+                            .font(.system(size: 11, weight: .medium))
+                        Text(error)
+                            .font(.system(size: 10))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(.orange)
+            }
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(MeterLocalization.text("Active account"))
