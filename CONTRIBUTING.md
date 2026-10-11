@@ -2,6 +2,8 @@
 
 Thanks for wanting to make Codex Meter better.
 
+Issues and pull requests are welcome in English or Simplified Chinese. 欢迎使用中文或英文提交问题、建议与 Pull Request。
+
 ## Before you start
 
 - Search the existing issues before opening a new one.
@@ -13,7 +15,7 @@ Thanks for wanting to make Codex Meter better.
 You need macOS 13 or newer, Swift 6, and a working Codex installation.
 
 ```sh
-git clone https://github.com/TheJhyeFactor/codex-meter.git
+git clone https://github.com/ooeooo/codex-meter.git
 cd codex-meter
 SKIP_LIVE_CODEX_CHECK=1 ./scripts/test.sh
 ./scripts/build-app.sh
