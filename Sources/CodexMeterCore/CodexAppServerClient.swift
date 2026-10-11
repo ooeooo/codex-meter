@@ -189,6 +189,12 @@ public actor CodexAppServerClient {
             MeterLocalization.format("Protocol stage: %@", MeterLocalization.text(protocolStage)),
             MeterLocalization.format("Process running: %@", MeterLocalization.text(process?.isRunning == true ? "yes" : "no"))
         ]
+        if executablePath == nil {
+            if !appBundleURLs.isEmpty {
+                lines.append(MeterLocalization.format("Desktop app candidates:\n%@", appBundleURLs.map(\.path).joined(separator: "\n")))
+            }
+            lines.append(MeterLocalization.format("Executable search paths:\n%@", Self.executableCandidatePaths(appBundleURLs: appBundleURLs).joined(separator: "\n")))
+        }
         if let lastExitStatus {
             lines.append(MeterLocalization.format("Process exit status: %d", lastExitStatus))
         }
@@ -309,7 +315,7 @@ public actor CodexAppServerClient {
             try send([
                 "method": "initialize",
                 "id": id,
-                "params": ["clientInfo": ["name": "codex_meter", "title": "Codex Meter", "version": "1.6.1"]]
+                "params": ["clientInfo": ["name": "codex_meter", "title": "Codex Meter", "version": "1.6.2"]]
             ])
         }
 

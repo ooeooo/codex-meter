@@ -19,11 +19,7 @@ public enum CodexExecutableLocator {
         }
 
         func appendDesktopBundle(_ appURL: URL) {
-            guard appURL.isFileURL,
-                  let data = try? Data(contentsOf: appURL.appendingPathComponent("Contents/Info.plist")),
-                  let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-                  plist["CFBundleIdentifier"] as? String == desktopBundleIdentifier else { return }
-            append(appURL.appendingPathComponent("Contents/Resources/codex").path)
+            for path in desktopCandidatePaths(in: appURL) { append(path) }
         }
 
         if let override = environment["CODEX_PATH"], override.hasPrefix("/"), isExecutableFile(override) {
@@ -67,6 +63,29 @@ public enum CodexExecutableLocator {
         candidatePaths(home: home, environment: environment, appBundleURLs: appBundleURLs)
             .first(where: isExecutableFile)
             .map { URL(fileURLWithPath: $0) }
+    }
+
+    /// Resolves the CLI bundled with the desktop app, never its Electron GUI executable.
+    public static func desktopExecutableURL(in appURL: URL) -> URL? {
+        desktopCandidatePaths(in: appURL)
+            .first(where: isExecutableFile)
+            .map { URL(fileURLWithPath: $0) }
+    }
+
+    private static func desktopCandidatePaths(in appURL: URL) -> [String] {
+        guard appURL.isFileURL,
+              let data = try? Data(contentsOf: appURL.appendingPathComponent("Contents/Info.plist")),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let identifier = plist["CFBundleIdentifier"] as? String,
+              identifier.caseInsensitiveCompare(desktopBundleIdentifier) == .orderedSame else { return [] }
+
+        // September 2026 desktop builds moved the service into codex-cli.
+        // Prefer its declared launcher; retain the signed native binary and legacy layout.
+        return [
+            "Contents/Resources/codex-cli/bin/codex",
+            "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+            "Contents/Resources/codex"
+        ].map { appURL.appendingPathComponent($0).standardizedFileURL.path }
     }
 
     private static func isExecutableFile(_ path: String) -> Bool {

@@ -36,6 +36,7 @@ struct AppServerHandshakeCheck {
             for _ in 0..<2 { checkPayload(try await client.readRateLimits()) }
             await client.stop()
         }
+        try await checkPackagedDesktopLayouts(root: fixtureRoot, executable: executable)
 
         for (scenario, expected) in [
             ("initialize-error", CodexClientError.server("Unsupported client capabilities")),
@@ -68,7 +69,50 @@ struct AppServerHandshakeCheck {
         }
         try await checkRestartDuringInitialize(root: fixtureRoot, executable: executable)
         try await checkReplaceDeadProcess(root: fixtureRoot, executable: executable)
-        print("App-server handshake, repeated polling, initialization failure and reconnect checks passed")
+        print("App-server handshake, packaged desktop launch, repeated polling, initialization failure and reconnect checks passed")
+    }
+
+    private static func checkPackagedDesktopLayouts(root: URL, executable: URL) async throws {
+        for (appName, withLauncher) in [("Codex.app", true), ("ChatGPT.app", false)] {
+            let app = root.appendingPathComponent("Packaged Desktop With Spaces/\(appName)", isDirectory: true)
+            let nested = app.appendingPathComponent("Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex")
+            try FileManager.default.createDirectory(at: nested.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try FileManager.default.copyItem(at: executable, to: nested)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: nested.path)
+            let plist = try PropertyListSerialization.data(
+                fromPropertyList: ["CFBundleIdentifier": "com.openai.codex"], format: .xml, options: 0
+            )
+            try plist.write(to: app.appendingPathComponent("Contents/Info.plist"))
+            var expected = nested
+            if withLauncher {
+                let launcher = app.appendingPathComponent("Contents/Resources/codex-cli/bin/codex")
+                try FileManager.default.createDirectory(at: launcher.deletingLastPathComponent(), withIntermediateDirectories: true)
+                let script = """
+                #!/bin/sh
+                set -eu
+                bin_dir=$(CDPATH= cd -P -- "$(dirname -- "$0")" && pwd)
+                exec "$bin_dir/../CodexCLI.app/Contents/MacOS/codex" "$@"
+
+                """
+                try Data(script.utf8).write(to: launcher)
+                try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launcher.path)
+                expected = launcher
+            }
+            guard CodexAppServerClient.locateExecutable(appBundleURLs: [app]) == expected else {
+                // Never launch a real user's CODEX_PATH override during this fixture.
+                throw FixtureError.unexpectedExecutable
+            }
+            let home = root.appendingPathComponent("packaged-profile-\(appName)", isDirectory: true)
+            try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+            let packagedClient = CodexAppServerClient(codexHome: home, appBundleURLs: [app])
+            do {
+                for _ in 0..<2 { checkPayload(try await packagedClient.readRateLimits()) }
+                await packagedClient.stop()
+            } catch {
+                await packagedClient.stop()
+                throw error
+            }
+        }
     }
 
     private static func checkRestartDuringInitialize(root: URL, executable: URL) async throws {
@@ -214,6 +258,7 @@ struct AppServerHandshakeCheck {
     private enum FixtureError: Error {
         case timedOut(String)
         case oldReadSucceeded
+        case unexpectedExecutable
     }
 
     private static func hasMarker(_ name: String, home: URL) -> Bool {

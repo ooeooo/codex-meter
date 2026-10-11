@@ -24,13 +24,17 @@ struct ExecutableLocatorCheck {
         let desktopCandidates = CodexExecutableLocator.candidatePaths(
             home: home.path, environment: [:], appBundleURLs: [classic, invalid, current, current, stale]
         )
-        precondition(desktopCandidates.prefix(2).elementsEqual([currentExecutable.path, staleExecutable.path]))
+        precondition(desktopCandidates.firstIndex(of: currentExecutable.path)! < desktopCandidates.firstIndex(of: staleExecutable.path)!)
         precondition(!desktopCandidates.contains(classicExecutable.path))
         precondition(!desktopCandidates.contains(invalid.appendingPathComponent("Contents/Resources/codex").path))
         precondition(Set(desktopCandidates).count == desktopCandidates.count)
         precondition(CodexExecutableLocator.locate(
             home: home.path, environment: [:], appBundleURLs: [current, stale]
         ) == currentExecutable)
+        precondition(CodexExecutableLocator.desktopExecutableURL(in: current) == currentExecutable)
+        precondition(CodexExecutableLocator.desktopExecutableURL(in: classic) == nil)
+        precondition(CodexExecutableLocator.desktopExecutableURL(in: invalid) == nil)
+        try checkPackagedDesktopLayouts(root: root)
 
         let override = root.appendingPathComponent("custom/codex")
         try makeExecutable(override)
@@ -68,14 +72,65 @@ struct ExecutableLocatorCheck {
         precondition(CodexExecutableLocator.locate(
             home: home.path, environment: [:], appBundleURLs: [current, stale]
         ) == staleExecutable)
-        print("Executable discovery checks passed")
+        print("Executable discovery and legacy/packaged desktop layout checks passed")
     }
 
-    private static func makeBundle(_ app: URL, identifier: String) throws -> URL {
-        let executable = app.appendingPathComponent("Contents/Resources/codex")
+    private static func checkPackagedDesktopLayouts(root: URL) throws {
+        let launcherPath = "Contents/Resources/codex-cli/bin/codex"
+        let nestedPath = "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
+        for appName in ["Codex.app", "ChatGPT.app"] {
+            for path in [launcherPath, nestedPath] {
+                let kind = path == launcherPath ? "launcher-only" : "nested-only"
+                let app = root.appendingPathComponent("\(kind)/\(appName)", isDirectory: true)
+                let executable = try makeBundle(app, identifier: "com.openai.codex", executablePath: path)
+                precondition(CodexExecutableLocator.desktopExecutableURL(in: app) == executable)
+                precondition(CodexExecutableLocator.locate(
+                    home: root.path, environment: [:], appBundleURLs: [app]
+                ) == executable)
+            }
+        }
+
+        let combined = root.appendingPathComponent("Both Layouts With Spaces/Codex.app", isDirectory: true)
+        let nested = try makeBundle(combined, identifier: "COM.OpenAI.CoDeX", executablePath: nestedPath)
+        let launcher = combined.appendingPathComponent(launcherPath)
+        try makeExecutable(launcher)
+        let legacy = combined.appendingPathComponent("Contents/Resources/codex")
+        try makeExecutable(legacy)
+        precondition(CodexExecutableLocator.desktopExecutableURL(in: combined) == launcher)
+        let candidates = CodexExecutableLocator.candidatePaths(
+            home: root.path, environment: [:], appBundleURLs: [combined]
+        )
+        precondition(candidates.firstIndex(of: launcher.path)! < candidates.firstIndex(of: nested.path)!)
+        precondition(candidates.firstIndex(of: nested.path)! < candidates.firstIndex(of: legacy.path)!)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: launcher.path)
+        precondition(CodexExecutableLocator.desktopExecutableURL(in: combined) == nested)
+        try FileManager.default.removeItem(at: launcher)
+        try FileManager.default.createSymbolicLink(
+            at: launcher, withDestinationURL: root.appendingPathComponent("missing-wrapper-target")
+        )
+        precondition(CodexExecutableLocator.desktopExecutableURL(in: combined) == nested)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: nested.path)
+        precondition(CodexExecutableLocator.desktopExecutableURL(in: combined) == legacy)
+
+        let guiOnly = root.appendingPathComponent("GUI Only/Codex.app", isDirectory: true)
+        _ = try makeBundle(guiOnly, identifier: "com.openai.codex", executablePath: "Contents/MacOS/Codex")
+        precondition(CodexExecutableLocator.desktopExecutableURL(in: guiOnly) == nil)
+        let classic = root.appendingPathComponent("Classic Modern Layout/ChatGPT.app", isDirectory: true)
+        let classicExecutable = try makeBundle(classic, identifier: "com.openai.chat", executablePath: launcherPath)
+        precondition(CodexExecutableLocator.desktopExecutableURL(in: classic) == nil)
+        precondition(!CodexExecutableLocator.candidatePaths(
+            home: root.path, environment: [:], appBundleURLs: [classic]
+        ).contains(classicExecutable.path))
+    }
+
+    private static func makeBundle(
+        _ app: URL, identifier: String, executablePath: String = "Contents/Resources/codex"
+    ) throws -> URL {
+        let executable = app.appendingPathComponent(executablePath)
         try makeExecutable(executable)
         let plist = try PropertyListSerialization.data(
-            fromPropertyList: ["CFBundleIdentifier": identifier], format: .xml, options: 0
+            fromPropertyList: ["CFBundleIdentifier": identifier, "CFBundleExecutable": "Codex"], format: .xml, options: 0
         )
         try plist.write(to: app.appendingPathComponent("Contents/Info.plist"))
         return executable

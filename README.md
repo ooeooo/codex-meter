@@ -96,15 +96,17 @@ macOS 使用打包后的 ICNS 图标；原始 PNG 和多尺寸 ICO 位于 `Resou
 - ChatGPT/Codex installed and signed in
 - A Codex plan that returns rate-limit information
 
-Codex Meter finds the running or registered official desktop app, checks `/Applications` and `~/Applications`, and supports absolute PATH, Homebrew, npm, Volta, and local CLI locations. The current unified ChatGPT desktop uses the Codex bundle identity; the classic ChatGPT app does not provide a Codex service. Developers launching from Terminal can also set `CODEX_PATH` to an absolute Codex executable path.
+Codex Meter uses the usage service bundled with the installed Codex desktop app; a separate CLI installation is not required. It supports both the legacy `Contents/Resources/codex` layout and the newer `Contents/Resources/codex-cli/` package. It finds the running or registered official desktop app, checks `/Applications` and `~/Applications`, and supports absolute PATH, Homebrew, npm, Volta, and local CLI locations. The current unified ChatGPT desktop uses the Codex bundle identity; the classic ChatGPT app does not provide a Codex service. Developers launching from Terminal can also set `CODEX_PATH` to an absolute Codex executable path.
 
 Codex Meter keeps each saved profile in an isolated `CODEX_HOME`. When you choose **Meter + Codex**, it uses OpenAI's documented `account/logout` and ChatGPT browser-login flow against the default Codex profile, verifies that login, then relaunches the desktop app. OpenAI does not publish a direct account-switch deep link, so a browser confirmation is required; Codex Meter never asks for or handles your password or MFA code.
 
 ## Troubleshooting quota reads
 
-If quota is unavailable, use **Try again**, then **Copy Diagnostics** in the usage section. The diagnostic text shows the selected executable, effective Codex data directory, protocol stage and sanitized process errors. It does not read or copy login credentials. Finder does not inherit shell-only `CODEX_PATH`, `CODEX_HOME`, proxy or CA settings; a Terminal launch with those variables may therefore use a different account or network configuration.
+If the desktop usage service cannot be found, click **Select Codex App…** and select the installed `Codex.app` or unified `ChatGPT.app`. Meter remembers the app location and retries with the same account. It validates the Codex bundle identity and its bundled service; selecting the classic ChatGPT app or an app without that service is rejected. This does not install a CLI, modify the desktop app or change its login.
 
-余量无法显示时，请在用量区点击 **重试**，再点击 **复制诊断信息**。菜单栏显示的是所有配额窗口中最低的剩余比例，展开“用量周期”可分别查看各窗口。构建测试使用真实协议格式的离线样本；真实账号的登录与网络状态仍需要在自己的 Mac 上验证。
+For other quota errors, use **Try again**, then **Copy Diagnostics** in the usage section. The diagnostic text shows the selected executable, effective Codex data directory, protocol stage and sanitized process errors; unresolved executables also include searched paths. It does not read or copy login credentials. Finder does not inherit shell-only `CODEX_PATH`, `CODEX_HOME`, proxy or CA settings; a Terminal launch with those variables may therefore use a different account or network configuration.
+
+已安装 macOS Codex 但提示找不到用量服务时，点击 **选择 Codex 应用…**，选中现有 `Codex.app` 或具有 Codex 服务的新版 `ChatGPT.app`；不需要另外安装 CLI。应用会保存路径并重新读取余量。其他错误可点击 **重试**，再点击 **复制诊断信息**。菜单栏显示的是所有配额窗口中最低的剩余比例，展开“用量周期”可分别查看各窗口。构建测试使用真实协议格式的离线样本；真实账号的登录与网络状态仍需要在自己的 Mac 上验证。
 
 ## Privacy by design
 

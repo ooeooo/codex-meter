@@ -2,6 +2,7 @@ import AppKit
 import CodexMeterCore
 import Foundation
 import ServiceManagement
+import UniformTypeIdentifiers
 import UserNotifications
 
 enum MenuBarDisplayMode: String, CaseIterable, Identifiable {
@@ -79,6 +80,7 @@ final class UsageStore: ObservableObject {
 
     private var client: CodexAppServerClient
     private var clientGeneration = UUID()
+    private var rediscoverClientOnNextRefresh = false
     private let activityScanner = LocalActivityScanner()
     private let previewMode: Bool
     private var pollingTask: Task<Void, Never>?
@@ -106,6 +108,7 @@ final class UsageStore: ObservableObject {
     private static let savingsMilestoneKey = "lastSavingsMilestoneUSD"
     private static let tokenMilestoneKey = "lastTokenMilestone"
     private static let resetMilestoneKey = "lastBankedReset"
+    private static let selectedCodexAppKey = "selectedCodexAppPath"
 
     init(previewMode: Bool = false) {
         let savedLanguage = MeterLanguage(rawValue: UserDefaults.standard.string(forKey: Self.languageKey) ?? "") ?? .system
@@ -245,13 +248,67 @@ final class UsageStore: ObservableObject {
     }
 
     private static func makeClient(codexHome: URL? = nil) -> CodexAppServerClient {
+        let selectedApp = selectedCodexAppURL()
         let runningApps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.codex")
             .compactMap(\.bundleURL)
         let registeredApp = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex")
         return CodexAppServerClient(
             codexHome: codexHome,
-            appBundleURLs: runningApps + [registeredApp].compactMap { $0 }
+            appBundleURLs: [selectedApp].compactMap { $0 } + runningApps + [registeredApp].compactMap { $0 }
         )
+    }
+
+    private static func selectedCodexAppURL() -> URL? {
+        guard let path = UserDefaults.standard.string(forKey: selectedCodexAppKey) else { return nil }
+        let appURL = URL(fileURLWithPath: path, isDirectory: true)
+        guard CodexExecutableLocator.desktopExecutableURL(in: appURL) != nil else { return nil }
+        return appURL
+    }
+
+    private func rebuildCurrentClient() -> CodexAppServerClient {
+        let previousClient = client
+        let codexHome = accounts.first(where: { $0.id == activeAccountID })?.homeURL
+        clientGeneration = UUID()
+        client = Self.makeClient(codexHome: codexHome)
+        rediscoverClientOnNextRefresh = false
+        payload = nil
+        setErrorMessage(nil)
+        lastUsageDiagnostics = nil
+        isRefreshing = false
+        return previousClient
+    }
+
+    func selectCodexApp() {
+        let panel = NSOpenPanel()
+        panel.title = MeterLocalization.text("Select Codex App…")
+        panel.message = MeterLocalization.text("Choose the installed Codex or ChatGPT app. Codex Meter will use its bundled Codex command-line tool.")
+        panel.allowedContentTypes = [.applicationBundle]
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.treatsFilePackagesAsDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
+        guard panel.runModal() == .OK, let selectedURL = panel.url else { return }
+        let appURL = selectedURL.standardizedFileURL
+        guard CodexExecutableLocator.desktopExecutableURL(in: appURL) != nil else {
+            setOperationError(MeterLocalization.text("The selected app is not a supported Codex desktop app with a bundled Codex command-line tool."))
+            return
+        }
+
+        UserDefaults.standard.set(appURL.path, forKey: Self.selectedCodexAppKey)
+        setOperationError(nil)
+        pollingTask?.cancel()
+        activityPollingTask?.cancel()
+        let previousClient = rebuildCurrentClient()
+        let nextClient = client
+        let generation = clientGeneration
+        let accountID = activeAccountID
+        Task {
+            await previousClient.stop()
+            guard isCurrentRequest(client: nextClient, accountID: accountID, generation: generation) else { return }
+            start()
+        }
     }
 
     private func isCurrentRequest(client requestClient: CodexAppServerClient, accountID: UUID, generation: UUID) -> Bool {
@@ -299,6 +356,7 @@ final class UsageStore: ObservableObject {
 
     func refresh() async {
         guard !isRefreshing else { return }
+        let previousClient = rediscoverClientOnNextRefresh ? rebuildCurrentClient() : nil
         let requestClient = client
         let generation = clientGeneration
         let accountID = activeAccountID
@@ -307,6 +365,10 @@ final class UsageStore: ObservableObject {
             if isCurrentRequest(client: requestClient, accountID: accountID, generation: generation) {
                 isRefreshing = false
             }
+        }
+        if let previousClient {
+            await previousClient.stop()
+            guard isCurrentRequest(client: requestClient, accountID: accountID, generation: generation) else { return }
         }
         do {
             let newPayload = try await requestClient.readRateLimits()
@@ -327,6 +389,7 @@ final class UsageStore: ObservableObject {
             }
         } catch {
             guard isCurrentRequest(client: requestClient, accountID: accountID, generation: generation) else { return }
+            rediscoverClientOnNextRefresh = (error as? CodexClientError) == .executableNotFound
             setErrorMessage((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
             let diagnostics = await requestClient.diagnosticSummary()
             guard isCurrentRequest(client: requestClient, accountID: accountID, generation: generation) else { return }
@@ -364,6 +427,16 @@ final class UsageStore: ObservableObject {
     func openCodex() {
         setOperationError(nil)
         let settingsURL = URL(string: "codex://settings")
+        if let selectedApp = Self.selectedCodexAppURL(), let settingsURL {
+            NSWorkspace.shared.open([settingsURL], withApplicationAt: selectedApp, configuration: .init()) { [weak self] _, error in
+                Task { @MainActor in
+                    if let error {
+                        self?.setOperationError(MeterLocalization.format("Codex could not be opened: %@", error.localizedDescription))
+                    }
+                }
+            }
+            return
+        }
         if let running = NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.codex").first {
             running.activate(options: [.activateAllWindows])
             if let settingsURL { _ = NSWorkspace.shared.open(settingsURL) }
@@ -423,6 +496,7 @@ final class UsageStore: ObservableObject {
         let previousClient = client
         let generation = UUID()
         clientGeneration = generation
+        rediscoverClientOnNextRefresh = false
         activeAccountID = id
         let nextClient = Self.makeClient(codexHome: profile.homeURL)
         client = nextClient
@@ -494,6 +568,7 @@ final class UsageStore: ObservableObject {
             pollingTask?.cancel()
             activityPollingTask?.cancel()
             clientGeneration = UUID()
+            rediscoverClientOnNextRefresh = false
             payload = nil
             activity = nil
             setErrorMessage(nil)

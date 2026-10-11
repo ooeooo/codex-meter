@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.2 — 2026-10-11
+
+- Fixed the false “Codex is not installed” error for desktop builds that moved their bundled service into `Contents/Resources/codex-cli/`; support the packaged launcher, nested native executable and legacy layout without a separate CLI installation.
+- Added a “Select Codex App…” recovery action for installations outside standard locations, persisted the selected app and refreshed desktop discovery when retrying a missing service.
+- Clarified the service-not-found message and included searched paths in sanitized diagnostics.
+- Added new-layout fixtures and real process handshake checks through a desktop bundle and its packaged launcher.
+
 ## 1.6.1 — 2026-10-11
 
 - Fixed quota bucket selection when modern servers return multiple limit IDs without a `codex` key; use the server’s canonical quota instead of an arbitrary product bucket.

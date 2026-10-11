@@ -29,6 +29,10 @@ enum LocalizationCheck {
         let profileName = "研发 100% / %@ %n"
         precondition(MeterLocalization.format("Delete %@?", profileName) == "Delete 研发 100% / %@ %n?")
         precondition(MeterLocalization.format("%d%% remains. %@", 0, "It resets tomorrow.") == "0% remains. It resets tomorrow.")
+        let missingDesktopService = "Could not find the usage service inside Codex. Select your installed Codex app."
+        precondition(MeterLocalization.text(missingDesktopService) == missingDesktopService)
+        precondition(CodexClientError.executableNotFound.errorDescription == missingDesktopService)
+        precondition(MeterLocalization.text("Select Codex App…") == "Select Codex App…")
         let encodedEnglish = try JSONEncoder().encode(window)
 
         MeterLocalization.language = .simplifiedChinese
@@ -47,6 +51,16 @@ enum LocalizationCheck {
         precondition(CodexClientError.server("Codex returned an unknown error.").errorDescription == "Codex 返回了未知错误。")
         precondition(CodexClientError.server("Error: user 123").errorDescription == "Error: user 123")
         precondition(LocalActivityError.unreadableSource.errorDescription == "无法读取本地 Codex 会话历史。")
+        precondition(MeterLocalization.text(missingDesktopService) == "无法找到 Codex 桌面应用内的用量服务。请选择已安装的 Codex 应用。")
+        precondition(CodexClientError.executableNotFound.errorDescription == "无法找到 Codex 桌面应用内的用量服务。请选择已安装的 Codex 应用。")
+        precondition(MeterLocalization.text("Select Codex App…") == "选择 Codex 应用…")
+        precondition(MeterLocalization.text("Choose the installed Codex or ChatGPT app. Codex Meter will use its bundled Codex command-line tool.") == "请选择已安装的 Codex 或 ChatGPT 应用。Codex Meter 将使用应用内置的用量服务，无需额外安装命令行工具。")
+        precondition(MeterLocalization.text("The selected app is not a supported Codex desktop app with a bundled Codex command-line tool.") == "所选应用不是受支持的 Codex 桌面应用，或其中缺少用量服务。")
+
+        let desktopPaths = "/Applications/ChatGPT.app\n/Volumes/工作 100%/Codex %@.app"
+        precondition(MeterLocalization.format("Desktop app candidates:\n%@", desktopPaths) == "Codex 桌面应用候选路径：\n" + desktopPaths)
+        let servicePath = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"
+        precondition(MeterLocalization.format("Executable search paths:\n%@", servicePath) == "可执行文件查找路径：\n" + servicePath)
 
         // A translated template must preserve each dynamic value, escape the
         // literal percent sign, and never parse user labels as format strings.

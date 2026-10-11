@@ -10,7 +10,7 @@ public enum CodexClientError: LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case .executableNotFound: return MeterLocalization.text("Codex is not installed in a supported location.")
+        case .executableNotFound: return MeterLocalization.text("Could not find the usage service inside Codex. Select your installed Codex app.")
         case .launch(let message): return MeterLocalization.format("Could not start Codex: %@", message)
         case .disconnected: return MeterLocalization.text("The Codex usage service stopped unexpectedly.")
         case .timedOut: return MeterLocalization.text("Codex did not return usage data in time.")
