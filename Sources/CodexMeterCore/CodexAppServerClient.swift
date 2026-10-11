@@ -51,7 +51,9 @@ public actor CodexAppServerClient {
 
     public func readRateLimits() async throws -> RateLimitPayload {
         if process?.isRunning != true { try start() }
+        let session = sessionID
         try await ensureInitialized()
+        try requireInitializedSession(session)
 
         protocolStage = "waiting for account/rateLimits/read"
         let id = nextID
@@ -74,7 +76,9 @@ public actor CodexAppServerClient {
 
     public func readAccount(refreshToken: Bool = false) async throws -> CodexAccount? {
         if process?.isRunning != true { try start() }
+        let session = sessionID
         try await ensureInitialized()
+        try requireInitializedSession(session)
 
         let id = nextID
         nextID += 1
@@ -96,7 +100,9 @@ public actor CodexAppServerClient {
 
     public func logoutAccount() async throws {
         if process?.isRunning != true { try start() }
+        let session = sessionID
         try await ensureInitialized()
+        try requireInitializedSession(session)
 
         let id = nextID
         nextID += 1
@@ -118,7 +124,9 @@ public actor CodexAppServerClient {
 
     public func startChatGPTLogin() async throws -> CodexLoginSession {
         if process?.isRunning != true { try start() }
+        let session = sessionID
         try await ensureInitialized()
+        try requireInitializedSession(session)
 
         let id = nextID
         nextID += 1
@@ -212,6 +220,9 @@ public actor CodexAppServerClient {
     }
 
     private func start() throws {
+        // A dead process may still have queued stdout callbacks and requests.
+        // Finish those requests before replacing the connection identity.
+        stop()
         let executable = explicitExecutableURL?.path
             ?? Self.locateExecutable(appBundleURLs: appBundleURLs)?.path
         guard let executable else {
@@ -286,6 +297,7 @@ public actor CodexAppServerClient {
     }
 
     private func ensureInitialized() async throws {
+        try Task.checkCancellation()
         if initialized { return }
         if let failure = initializationError { throw failure }
         let session = sessionID
@@ -312,6 +324,15 @@ public actor CodexAppServerClient {
                 throw CodexClientError.timedOut
             }
             try await Task.sleep(for: .milliseconds(50))
+        }
+        // A replacement process can initialize while this task is sleeping.
+        try requireInitializedSession(session)
+    }
+
+    private func requireInitializedSession(_ session: UUID) throws {
+        try Task.checkCancellation()
+        guard session == sessionID, initialized, process?.isRunning == true else {
+            throw CodexClientError.disconnected
         }
     }
 
