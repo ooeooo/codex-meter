@@ -260,7 +260,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if let report, report.reportedDays > 0, store.analyticsError == nil, !isStale {
             button.image = usageHistoryImage(from: report.days)
             button.toolTip = ([MeterLocalization.text("Daily account token usage")] + report.days.map { day in
-                day.day + ": " + (day.tokens.map { $0.formatted(.number.locale(MeterLocalization.locale)) } ?? MeterLocalization.text("Not reported"))
+                day.day + ": " + (day.tokens.map(AccountUsageChartPresentation.groupedCount) ?? MeterLocalization.text("Not reported"))
             }).joined(separator: "\n")
         } else {
             button.image = NSImage(systemSymbolName: store.analyticsError != nil || isStale ? "exclamationmark.circle" : "chart.bar", accessibilityDescription: MeterLocalization.text("Usage history"))

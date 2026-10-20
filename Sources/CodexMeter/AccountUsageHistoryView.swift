@@ -29,7 +29,7 @@ struct AccountUsageHistoryView: View {
                 .accessibilityLabel(MeterLocalization.text("Period"))
                 .frame(width: 135)
                 Spacer(minLength: 6)
-                Text(MeterLocalization.text("Tokens (millions)"))
+                Text(MeterLocalization.text("Tokens (M / B)"))
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -186,15 +186,15 @@ struct AccountUsageHistoryView: View {
     private func metric(title: String, value: Int64?) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title).font(.system(size: 10)).foregroundStyle(.secondary)
-            Text(value.map(compact) ?? "—")
+            Text(value.map(AccountUsageChartPresentation.compactCount) ?? "—")
                 .font(.system(size: 20, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .lineLimit(1)
             Text(MeterLocalization.text("tokens")).font(.system(size: 9)).foregroundStyle(.secondary)
         }
-        .help(value.map { $0.formatted(.number.locale(MeterLocalization.locale)) } ?? MeterLocalization.text("Not reported"))
+        .help(value.map(AccountUsageChartPresentation.groupedCount) ?? MeterLocalization.text("Not reported"))
         .accessibilityElement(children: .combine)
-        .accessibilityValue(value.map { String($0) } ?? MeterLocalization.text("Not reported"))
+        .accessibilityValue(value.map(AccountUsageChartPresentation.groupedCount) ?? MeterLocalization.text("Not reported"))
     }
 
     private func dailyChart(_ report: AccountUsageReport) -> some View {
@@ -207,7 +207,7 @@ struct AccountUsageHistoryView: View {
                 .foregroundStyle(Color.accentColor.opacity(activeDay == nil || activeDay == day.day ? 1 : 0.3))
                 .cornerRadius(2)
                 .accessibilityLabel(day.day)
-                .accessibilityValue(String(day.tokens ?? 0))
+                .accessibilityValue(AccountUsageChartPresentation.groupedCount(day.tokens ?? 0))
                 if day.tokens == 0 {
                     PointMark(x: .value("Day", day.date.addingTimeInterval(43_200)), y: .value("Tokens", 0))
                         .symbolSize(10)
@@ -281,11 +281,11 @@ struct AccountUsageHistoryView: View {
                     HStack {
                         Text(day.day).fontWeight(.medium).fixedSize()
                         Spacer()
-                        Text(day.tokens.map { AccountUsageChartPresentation.millionLabel(AccountUsageChartPresentation.millions($0)) }
+                        Text(day.tokens.map(AccountUsageChartPresentation.compactCount)
                              ?? MeterLocalization.text("Not reported"))
                     }
                     if let tokens = day.tokens {
-                        Text(MeterLocalization.format("%@: %@ tokens", day.day, tokens.formatted(.number.locale(MeterLocalization.locale))))
+                        Text(MeterLocalization.format("%@: %@ tokens", day.day, AccountUsageChartPresentation.groupedCount(tokens)))
                             .font(.system(size: 9)).foregroundStyle(.secondary)
                     }
                 }
@@ -350,7 +350,7 @@ struct AccountUsageHistoryView: View {
                             HStack {
                                 Text(day.day).fixedSize()
                                 Spacer()
-                                Text(day.tokens.map { $0.formatted(.number.locale(MeterLocalization.locale)) } ?? MeterLocalization.text("Not reported"))
+                                Text(day.tokens.map(AccountUsageChartPresentation.groupedCount) ?? MeterLocalization.text("Not reported"))
                                     .monospacedDigit()
                             }
                             .font(.system(size: 10))
@@ -360,7 +360,7 @@ struct AccountUsageHistoryView: View {
                                         in: RoundedRectangle(cornerRadius: 4))
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel(MeterLocalization.format("%@: %@ tokens", day.day, day.tokens.map(String.init) ?? MeterLocalization.text("Not reported")))
+                        .accessibilityLabel(MeterLocalization.format("%@: %@ tokens", day.day, day.tokens.map(AccountUsageChartPresentation.groupedCount) ?? MeterLocalization.text("Not reported")))
                     }
                 }
             }
@@ -375,15 +375,8 @@ struct AccountUsageHistoryView: View {
         HStack {
             Text(MeterLocalization.text(title)).foregroundStyle(.secondary)
             Spacer()
-            Text(value.map { $0.formatted(.number.locale(MeterLocalization.locale)) } ?? "—").monospacedDigit()
+            Text(value.map(AccountUsageChartPresentation.groupedCount) ?? "—").monospacedDigit()
         }
         .font(.system(size: 10))
-    }
-
-    private func compact(_ count: Int64) -> String {
-        if count >= 1_000_000_000 { return String(format: "%.1fB", Double(count) / 1_000_000_000) }
-        if count >= 1_000_000 { return String(format: "%.1fM", Double(count) / 1_000_000) }
-        if count >= 1_000 { return String(format: "%.1fK", Double(count) / 1_000) }
-        return String(count)
     }
 }

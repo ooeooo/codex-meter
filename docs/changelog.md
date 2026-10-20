@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.7.4 — 2026-10-20
+
+- Standardized account usage units to M and B, with comma separators every three digits in charts, readouts, daily details, cumulative statistics and menu-bar history tooltips.
+- Unified summary/axis formatting, kept exact 64-bit counts intact and handled the rounded M-to-B boundary without scientific notation.
+
 ## 1.7.3 — 2026-10-20
 
 - Changed settings to flow with the main scroll document: they sit at the visible bottom for short content and follow overflowing content below the viewport.

@@ -2,11 +2,26 @@ import CodexMeterCore
 import Foundation
 
 enum AccountUsageChartPresentation {
+    private static let numberLocale = Locale(identifier: "en_US")
+
     static func millions(_ tokens: Int64) -> Double { Double(tokens) / 1_000_000 }
 
-    static func millionLabel(_ value: Double, locale: Locale = MeterLocalization.locale, chinese: Bool = MeterLocalization.isChinese) -> String {
-        let number = value.formatted(.number.locale(locale).precision(.fractionLength(0...9)).grouping(.never))
-        return number + (chinese ? "兆" : "M")
+    static func millionLabel(_ value: Double) -> String {
+        // Promote values that would round to 1,000M to the billion unit.
+        let useBillions = abs(value) >= 999.995
+        let scaled = useBillions ? value / 1_000 : value
+        let decimals = scaled != 0 && abs(scaled) < 0.01 ? 9 : 2
+        let number = scaled.formatted(.number.locale(numberLocale)
+            .precision(.fractionLength(0...decimals)).grouping(.automatic))
+        return number + (useBillions ? "B" : "M")
+    }
+
+    static func groupedCount(_ value: Int64) -> String {
+        value.formatted(.number.locale(numberLocale).grouping(.automatic))
+    }
+
+    static func compactCount(_ value: Int64) -> String {
+        value >= 1_000_000 ? millionLabel(millions(value)) : groupedCount(value)
     }
 
     static func axisDates(_ days: [AccountUsageDay]) -> [Date] {

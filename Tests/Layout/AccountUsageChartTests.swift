@@ -4,15 +4,22 @@ import XCTest
 @testable import CodexMeter
 
 final class AccountUsageChartTests: XCTestCase {
-    func testMillionsStayReadableWithoutScientificNotation() {
-        let locale = Locale(identifier: "en_US")
-        XCTAssertEqual(AccountUsageChartPresentation.millionLabel(1.25, locale: locale, chinese: true), "1.25兆")
-        XCTAssertEqual(AccountUsageChartPresentation.millionLabel(1.25, locale: locale, chinese: false), "1.25M")
-        XCTAssertEqual(AccountUsageChartPresentation.millionLabel(0.000001, locale: locale, chinese: true), "0.000001兆")
+    func testCompactUnitsAndCommaGrouping() {
+        XCTAssertEqual(AccountUsageChartPresentation.millionLabel(1.25), "1.25M")
+        XCTAssertEqual(AccountUsageChartPresentation.millionLabel(1_250), "1.25B")
+        XCTAssertEqual(AccountUsageChartPresentation.millionLabel(1_234_567.89), "1,234.57B")
+        XCTAssertEqual(AccountUsageChartPresentation.millionLabel(0.000001), "0.000001M")
+        XCTAssertEqual(AccountUsageChartPresentation.compactCount(123_456), "123,456")
+        XCTAssertEqual(AccountUsageChartPresentation.compactCount(1_250_000), "1.25M")
+        XCTAssertEqual(AccountUsageChartPresentation.compactCount(1_250_000_000), "1.25B")
+        XCTAssertEqual(AccountUsageChartPresentation.compactCount(999_995_000), "1B")
+        XCTAssertEqual(AccountUsageChartPresentation.compactCount(999_994_999), "999.99M")
+        XCTAssertEqual(AccountUsageChartPresentation.groupedCount(1_234_567_890), "1,234,567,890")
+        XCTAssertEqual(AccountUsageChartPresentation.groupedCount(Int64.max), "9,223,372,036,854,775,807")
         for tokens: Int64 in [0, 1, 500, 1_000_000, 1_250_000, Int64.max] {
-            let label = AccountUsageChartPresentation.millionLabel(AccountUsageChartPresentation.millions(tokens), locale: locale, chinese: false)
+            let label = AccountUsageChartPresentation.millionLabel(AccountUsageChartPresentation.millions(tokens))
             XCTAssertFalse(label.lowercased().contains("e"))
-            XCTAssertTrue(label.hasSuffix("M"))
+            XCTAssertTrue(label.hasSuffix("M") || label.hasSuffix("B"))
         }
     }
 
