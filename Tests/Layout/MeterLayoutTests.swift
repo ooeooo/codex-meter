@@ -97,14 +97,18 @@ final class MeterLayoutTests: XCTestCase {
         let document = try XCTUnwrap(scroll.documentView)
         let footer = try XCTUnwrap(findFooter(in: controller.view))
         let footerFrame = controller.view.convert(footer.bounds, from: footer)
+        XCTAssertTrue(footer.isDescendant(of: document), "Settings must belong to the same scroll document")
+        XCTAssertFalse(scroll.documentVisibleRect.intersects(document.convert(footer.bounds, from: footer)), "Overflowing content must push settings below the visible area")
         XCTAssertGreaterThan(scroll.contentSize.height, 300)
         XCTAssertGreaterThan(document.frame.height, 1_000)
         XCTAssertLessThan(scroll.contentSize.height, size.height)
         document.scroll(NSPoint(x: 0, y: document.frame.height))
         XCTAssertGreaterThan(scroll.documentVisibleRect.minY, 0, "Account totals must be reachable by scrolling")
         XCTAssertEqual(controller.view.bounds.height, size.height, accuracy: 2)
-        XCTAssertEqual(controller.view.convert(footer.bounds, from: footer), footerFrame, "Settings must stay pinned while daily rows scroll")
-        assertFooterAtBottom(footerFrame, in: controller.view)
+        let scrolledFooterFrame = controller.view.convert(footer.bounds, from: footer)
+        XCTAssertNotEqual(scrolledFooterFrame, footerFrame, "Settings must move when the document scrolls")
+        XCTAssertTrue(scroll.documentVisibleRect.intersects(document.convert(footer.bounds, from: footer)), "Scrolling to the end must reveal settings")
+        assertFooterAtBottom(scrolledFooterFrame, in: controller.view)
     }
 
     @MainActor
@@ -172,6 +176,39 @@ final class MeterLayoutTests: XCTestCase {
     }
 
     @MainActor
+    func testExpandedSettingsUseTheMainScrollDocument() async throws {
+        _ = NSApplication.shared
+        let defaults = UserDefaults.standard
+        let keys = ["usageWindowsExpanded", "accountUsageHistoryExpanded", "settingsExpanded"]
+        let saved = keys.map { defaults.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, saved) {
+                if let value { defaults.set(value, forKey: key) }
+                else { defaults.removeObject(forKey: key) }
+            }
+        }
+        defaults.set(false, forKey: keys[0])
+        defaults.set(false, forKey: keys[1])
+        defaults.set(true, forKey: keys[2])
+        let controller = MeterPanelLayout.controller(store: UsageStore(previewMode: true),
+            size: NSSize(width: 348, height: 400))
+        let window = NSWindow(contentViewController: controller)
+        window.isReleasedWhenClosed = false
+        window.orderFrontRegardless()
+        defer { window.close() }
+        try await Task.sleep(for: .milliseconds(250))
+        controller.view.layoutSubtreeIfNeeded()
+        let scrolls = allScrollViews(in: controller.view)
+        XCTAssertEqual(scrolls.count, 1, "Expanded settings must not introduce their own scrolling region")
+        let scroll = try XCTUnwrap(scrolls.first)
+        let document = try XCTUnwrap(scroll.documentView)
+        XCTAssertGreaterThan(document.frame.height, scroll.contentSize.height)
+        document.scroll(NSPoint(x: 0, y: document.frame.height))
+        XCTAssertGreaterThan(scroll.documentVisibleRect.minY, 0)
+        XCTAssertEqual(controller.view.bounds.height, 400, accuracy: 2)
+    }
+
+    @MainActor
     private func assertFooterAtBottom(_ frame: NSRect, in view: NSView) {
         let inset = view.isFlipped ? view.bounds.maxY - frame.maxY : frame.minY - view.bounds.minY
         XCTAssertEqual(inset, 6, accuracy: 2)
@@ -179,11 +216,17 @@ final class MeterLayoutTests: XCTestCase {
 
     @MainActor
     private func findFooter(in view: NSView) -> NSView? {
-        if view.identifier?.rawValue == "pinned-settings" { return view }
+        if view.identifier?.rawValue == "flowing-settings" { return view }
         for child in view.subviews {
             if let footer = findFooter(in: child) { return footer }
         }
         return nil
+    }
+
+    @MainActor
+    private func allScrollViews(in view: NSView) -> [NSScrollView] {
+        let current = (view as? NSScrollView).map { [$0] } ?? []
+        return current + view.subviews.flatMap { allScrollViews(in: $0) }
     }
 
     @MainActor
@@ -199,7 +242,7 @@ final class MeterLayoutTests: XCTestCase {
 private struct FooterProbe: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
-        view.identifier = NSUserInterfaceItemIdentifier("pinned-settings")
+        view.identifier = NSUserInterfaceItemIdentifier("flowing-settings")
         return view
     }
     func updateNSView(_ nsView: NSView, context: Context) {}

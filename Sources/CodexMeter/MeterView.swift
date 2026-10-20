@@ -244,10 +244,7 @@ struct MeterView: View {
 
     private var settings: some View {
         DisclosureGroup(isExpanded: $settingsExpanded) {
-            ScrollView {
-                footer
-            }
-            .frame(height: min(340, panelHeight * 0.45))
+            footer
         } label: {
             SectionLabel(title: MeterLocalization.text("Settings"), detail: MeterLocalization.text("Display, alerts and accounts"))
         }

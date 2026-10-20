@@ -169,7 +169,7 @@ Alert thresholds, menu-bar modes, account history and CLI automation stay on you
 - Switches between icon + percentage, reset + percentage, percentage-only, icon-only and daily-usage-history menu-bar modes.
 - Includes a universal `codex-meter` CLI with stable text/JSON output and threshold exit codes.
 - Supports launch at login without adding a Dock icon.
-- Keeps history collapsible, pins settings to the bottom, scrolls expanded content within the screen height and compacts the popover when all sections are closed.
+- Keeps history collapsible, places settings at the bottom when space allows and scrolls them after longer content; compacts the popover when all sections are closed.
 - Works natively on Apple silicon and Intel Macs.
 
 ## Download and install

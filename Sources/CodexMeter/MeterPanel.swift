@@ -39,8 +39,8 @@ enum MeterPanelLayout {
     }
 }
 
-/// The viewport owns its size. Its document can grow without resizing the
-/// viewport, including before the first layout or after expanding daily rows.
+/// One scroll document fills the viewport or grows beyond it. Spare space
+/// pushes settings to the bottom; overflowing content scrolls settings with it.
 struct MeterPanel<Header: View, Content: View, Footer: View>: View {
     let height: CGFloat
     @ViewBuilder var header: Header
@@ -51,16 +51,19 @@ struct MeterPanel<Header: View, Content: View, Footer: View>: View {
         VStack(spacing: 0) {
             header.fixedSize(horizontal: false, vertical: true)
             Divider()
-            ScrollView {
-                VStack(spacing: 0) {
-                    content
+            GeometryReader { viewport in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        content.fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                        Divider()
+                        footer.fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: viewport.size.height, alignment: .top)
                 }
-                .frame(maxWidth: .infinity)
-                .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            Divider()
-            footer.fixedSize(horizontal: false, vertical: true)
         }
         .padding(.vertical, 6)
         .frame(width: MeterPanelLayout.width, height: height)

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7.3 — 2026-10-20
+
+- Changed settings to flow with the main scroll document: they sit at the visible bottom for short content and follow overflowing content below the viewport.
+- Removed the separate settings scroller and retained safe, expansion-driven popover sizing.
+- Updated macOS layout checks to verify that settings scroll into view with long content, stay low with short content and share one scrollbar when expanded.
+
 ## 1.7.2 — 2026-10-20
 
 - Added hover, click and drag inspection to daily usage charts, with persistent day selection and exact token readouts.
