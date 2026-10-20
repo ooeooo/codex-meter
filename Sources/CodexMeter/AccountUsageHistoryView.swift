@@ -14,19 +14,25 @@ struct AccountUsageHistoryView: View {
     @State private var onlyActive = false
     @State private var sort: AccountUsageSort = .newest
     @State private var selectedDay: String?
+    @State private var hoveredDay: String?
     @State private var detailsExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(MeterLocalization.text("Account usage history"))
-                    .font(.system(size: 12, weight: .semibold))
-                Spacer(minLength: 6)
                 Picker(MeterLocalization.text("Period"), selection: $store.analyticsRange) {
                     ForEach(AccountUsageRange.allCases) { range in Text(range.title).tag(range) }
                 }
                 .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+                .accessibilityLabel(MeterLocalization.text("Period"))
                 .frame(width: 135)
+                Spacer(minLength: 6)
+                Text(MeterLocalization.text("Tokens (millions)"))
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             if let usage = store.analytics {
                 report(usage)
@@ -62,7 +68,7 @@ struct AccountUsageHistoryView: View {
             }
             dailyDetailsDisclosure
         }
-        .onChange(of: store.analyticsRange) { _ in selectedDay = nil }
+        .onChange(of: store.analyticsRange) { _ in selectedDay = nil; hoveredDay = nil }
     }
 
     @ViewBuilder
@@ -71,6 +77,7 @@ struct AccountUsageHistoryView: View {
         if report.reportedDays > 0 {
             dailyChart(report)
                 .opacity(store.analyticsError == nil ? 1 : 0.5)
+            chartReadout(report)
         } else {
             Text(MeterLocalization.text(report.hasDailyDetail
                 ? "No daily usage was reported for this period."
@@ -191,24 +198,114 @@ struct AccountUsageHistoryView: View {
     }
 
     private func dailyChart(_ report: AccountUsageReport) -> some View {
-        Chart(report.days.filter { $0.tokens != nil }) { day in
-            BarMark(
-                x: .value(MeterLocalization.text("Day"), day.date, unit: .day),
-                y: .value(MeterLocalization.text("Tokens"), day.tokens ?? 0)
-            )
-            .foregroundStyle(Color.accentColor.opacity(selectedDay == nil || selectedDay == day.day ? 1 : 0.3))
-            .cornerRadius(2)
-            .accessibilityLabel(day.day)
-            .accessibilityValue(String(day.tokens ?? 0))
+        Chart {
+            ForEach(report.days.filter { $0.tokens != nil }) { day in
+                BarMark(
+                    x: .value(MeterLocalization.text("Day"), day.date, unit: .day),
+                    y: .value(MeterLocalization.text("Tokens"), AccountUsageChartPresentation.millions(day.tokens ?? 0))
+                )
+                .foregroundStyle(Color.accentColor.opacity(activeDay == nil || activeDay == day.day ? 1 : 0.3))
+                .cornerRadius(2)
+                .accessibilityLabel(day.day)
+                .accessibilityValue(String(day.tokens ?? 0))
+                if day.tokens == 0 {
+                    PointMark(x: .value("Day", day.date.addingTimeInterval(43_200)), y: .value("Tokens", 0))
+                        .symbolSize(10)
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+            if let day = report.days.first(where: { $0.day == activeDay }) {
+                RuleMark(x: .value("Day", day.date.addingTimeInterval(43_200)))
+                    .foregroundStyle(Color.secondary)
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            }
         }
-        .chartXScale(domain: chartDomain(report))
-        .chartYScale(domain: 0...max(1, Double(report.peakTokens ?? 0)))
-        .chartXAxis { AxisMarks(values: .automatic(desiredCount: 4)) }
-        .chartYAxis { AxisMarks(values: .automatic(desiredCount: 3)) }
+        .chartXScale(domain: chartDomain(report), range: .plotDimension(padding: 16))
+        .chartYScale(domain: 0...AccountUsageChartPresentation.millions(max(1, report.peakTokens ?? 0)))
+        .chartXAxis {
+            AxisMarks(values: AccountUsageChartPresentation.axisDates(report.days)) { value in
+                AxisTick()
+                AxisValueLabel {
+                    if let date = value.as(Date.self) {
+                        Text(AccountUsageChartPresentation.dateLabel(date))
+                            .font(.system(size: 9))
+                            .fixedSize()
+                    }
+                }
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { value in
+                AxisGridLine()
+                AxisValueLabel {
+                    if let millions = value.as(Double.self) {
+                        Text(AccountUsageChartPresentation.millionLabel(millions))
+                            .font(.system(size: 9))
+                            .fixedSize()
+                    }
+                }
+            }
+        }
+        .chartOverlay { proxy in
+            GeometryReader { geometry in
+                Rectangle().fill(Color.clear).contentShape(Rectangle())
+                    .onContinuousHover { phase in
+                        switch phase {
+                        case .active(let location): hoveredDay = chartDay(at: location, proxy: proxy, geometry: geometry, report: report)
+                        case .ended: hoveredDay = nil
+                        }
+                    }
+                    .gesture(DragGesture(minimumDistance: 0).onChanged { value in
+                        selectedDay = chartDay(at: value.location, proxy: proxy, geometry: geometry, report: report)
+                    })
+            }
+        }
         .environment(\.calendar, AccountUsageDay.calendar)
         .environment(\.timeZone, TimeZone(secondsFromGMT: 0)!)
-        .frame(height: 100)
+        .frame(height: 125)
         .accessibilityLabel(MeterLocalization.text("Daily account token usage"))
+    }
+
+    private var activeDay: String? { hoveredDay ?? selectedDay }
+
+    private func chartDay(at location: CGPoint, proxy: ChartProxy, geometry: GeometryProxy, report: AccountUsageReport) -> String? {
+        let plot = geometry[proxy.plotAreaFrame]
+        guard plot.contains(location), let date: Date = proxy.value(atX: location.x - plot.minX) else { return nil }
+        return AccountUsageChartPresentation.day(at: date, in: report.days)
+    }
+
+    private func chartReadout(_ report: AccountUsageReport) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            if let day = report.days.first(where: { $0.day == activeDay }) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Text(day.day).fontWeight(.medium).fixedSize()
+                        Spacer()
+                        Text(day.tokens.map { AccountUsageChartPresentation.millionLabel(AccountUsageChartPresentation.millions($0)) }
+                             ?? MeterLocalization.text("Not reported"))
+                    }
+                    if let tokens = day.tokens {
+                        Text(MeterLocalization.format("%@: %@ tokens", day.day, tokens.formatted(.number.locale(MeterLocalization.locale))))
+                            .font(.system(size: 9)).foregroundStyle(.secondary)
+                    }
+                }
+            } else {
+                Text(MeterLocalization.text("Point to or click a day to see usage."))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            if selectedDay != nil {
+                Button { selectedDay = nil; hoveredDay = nil } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .help(MeterLocalization.text("Clear day selection"))
+                .accessibilityLabel(MeterLocalization.text("Clear day selection"))
+            }
+        }
+        .font(.system(size: 10))
+        .frame(minHeight: 30, alignment: .top)
     }
 
     private func chartDomain(_ report: AccountUsageReport) -> ClosedRange<Date> {
@@ -251,7 +348,7 @@ struct AccountUsageHistoryView: View {
                             selectedDay = selectedDay == day.day ? nil : day.day
                         } label: {
                             HStack {
-                                Text(day.day)
+                                Text(day.day).fixedSize()
                                 Spacer()
                                 Text(day.tokens.map { $0.formatted(.number.locale(MeterLocalization.locale)) } ?? MeterLocalization.text("Not reported"))
                                     .monospacedDigit()

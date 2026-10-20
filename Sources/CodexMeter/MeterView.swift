@@ -8,16 +8,17 @@ struct MeterView: View {
     var panelHeight: CGFloat = MeterPanelLayout.preferredHeight
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("usageWindowsExpanded") private var usageWindowsExpanded = true
+    @AppStorage("accountUsageHistoryExpanded") private var historyExpanded = true
     @AppStorage("settingsExpanded") private var settingsExpanded = false
     @State private var now = Date()
 
     var body: some View {
         ZStack(alignment: .top) {
-            MeterPanel(height: panelHeight) {
+            MeterPanel(height: displayHeight) {
                 header
             } content: {
                 content(now: now)
-                Divider()
+            } footer: {
                 settings
             }
             if let celebration = store.celebration {
@@ -40,6 +41,11 @@ struct MeterView: View {
             if error != nil { settingsExpanded = true }
         }
         .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { now = $0 }
+    }
+
+    private var displayHeight: CGFloat {
+        MeterPanelLayout.height(maximum: panelHeight, usageExpanded: usageWindowsExpanded,
+            historyExpanded: historyExpanded, settingsExpanded: settingsExpanded)
     }
 
     private var header: some View {
@@ -148,8 +154,13 @@ struct MeterView: View {
                     .stroke(Color.white.opacity(colorScheme == .dark ? 0.08 : 0.3), lineWidth: 0.6)
             }
             Divider()
-            AccountUsageHistoryView(store: store, now: now)
-            .id(store.activeAccountID)
+            DisclosureGroup(isExpanded: $historyExpanded) {
+                AccountUsageHistoryView(store: store, now: now)
+                    .id(store.activeAccountID)
+                    .padding(.top, 10)
+            } label: {
+                SectionLabel(title: MeterLocalization.text("Account usage history"), detail: MeterLocalization.text("All devices"))
+            }
             .padding(16)
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay {
@@ -233,7 +244,10 @@ struct MeterView: View {
 
     private var settings: some View {
         DisclosureGroup(isExpanded: $settingsExpanded) {
-            footer
+            ScrollView {
+                footer
+            }
+            .frame(height: min(340, panelHeight * 0.45))
         } label: {
             SectionLabel(title: MeterLocalization.text("Settings"), detail: MeterLocalization.text("Display, alerts and accounts"))
         }
@@ -368,9 +382,9 @@ private struct SectionLabel: View {
 
     var body: some View {
         HStack {
-            Text(title).font(.system(size: 12, weight: .medium))
+            Text(title).font(.system(size: 12, weight: .medium)).lineLimit(1).layoutPriority(1)
             Spacer()
-            Text(detail).font(.system(size: 10)).foregroundStyle(.secondary)
+            Text(detail).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
         }
     }
 }

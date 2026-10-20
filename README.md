@@ -31,7 +31,7 @@ Codex Meter 是一款免费、开源的 macOS 菜单栏应用，用于查看 **�
 ### 主要功能
 
 - **余量与重置时间**：菜单栏显示各配额窗口中最低的剩余比例，展开后可分别查看各窗口和重置时间。
-- **账号用量历史**：在原账号历史区域直接显示每日 token 图表，支持最近 7 天／30 天；默认只显示一个图表。
+- **账号用量历史**：可折叠展开，支持最近 7 天／30 天；悬停、点击或拖动图表查看每日用量，纵轴使用“兆”，日期完整显示为月／日。
 - **展开每日明细**：点击“每日明细与累计统计”，查看期间合计、单日峰值、账号累计统计及近期配额变化；支持日期查找、用量升降序和仅看有用量日期。
 - **重置与停机处理**：按配额窗口和重置时间区分周期，余量回升或跨周期时提示重置或调整，无法还原的区间标为未知。
 - **余额与重置次数**：显示服务返回的积分余额、可用重置次数；未返回的数据明确显示为未提供。
@@ -169,7 +169,7 @@ Alert thresholds, menu-bar modes, account history and CLI automation stay on you
 - Switches between icon + percentage, reset + percentage, percentage-only, icon-only and daily-usage-history menu-bar modes.
 - Includes a universal `codex-meter` CLI with stable text/JSON output and threshold exit codes.
 - Supports launch at login without adding a Dock icon.
-- Keeps daily details and settings collapsed by default and scrolls expanded content within the available screen height.
+- Keeps history collapsible, pins settings to the bottom, scrolls expanded content within the screen height and compacts the popover when all sections are closed.
 - Works natively on Apple silicon and Intel Macs.
 
 ## Download and install

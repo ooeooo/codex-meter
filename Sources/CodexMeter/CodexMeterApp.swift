@@ -112,16 +112,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private func preparePopover() {
         let screen = statusItem.button?.window?.screen ?? NSScreen.main
         let size = MeterPanelLayout.size(visibleHeight: screen?.visibleFrame.height)
+        let presentation = MeterPanelLayout.presentationSize(maximum: size)
         if let meterController {
             meterController.rootView = MeterView(store: store, panelHeight: size.height)
-            meterController.preferredContentSize = size
-            meterController.view.setFrameSize(size)
+            meterController.preferredContentSize = presentation
+            meterController.view.setFrameSize(presentation)
         } else {
             let controller = MeterPanelLayout.controller(store: store, size: size)
             meterController = controller
             popover.contentViewController = controller
         }
-        popover.contentSize = size
+        popover.contentSize = presentation
     }
 
     @objc private func refresh() {

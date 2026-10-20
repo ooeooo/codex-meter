@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.7.2 — 2026-10-20
+
+- Added hover, click and drag inspection to daily usage charts, with persistent day selection and exact token readouts.
+- Replaced scientific axis labels with millions (兆 in Chinese) and four complete month/day labels, preserving missing days and explicit zero usage.
+- Made account usage history collapsible and hid the redundant period-picker label.
+- Pinned settings outside the history scroll area, bounded expanded settings to their own scroll region and compacted the popover when all sections are collapsed.
+- Added chart-formatting/date-selection checks and macOS tests for pinned settings and expansion-driven popover resizing.
+
 ## 1.7.1 — 2026-10-20
 
 - Fixed popovers showing only the header by removing content-height feedback and setting an explicit, screen-bounded viewport before presentation.

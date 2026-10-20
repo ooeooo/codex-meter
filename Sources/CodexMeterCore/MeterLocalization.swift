@@ -87,6 +87,9 @@ public enum MeterLocalization {
     }
 
     private static let simplifiedChinese: [String: String] = [
+        "Tokens (millions)": "用量（兆 token）",
+        "Point to or click a day to see usage.": "悬停或点击日期可查看每日用量。",
+        "Clear day selection": "清除日期选择",
         "Account usage history": "账号用量历史",
         "Usage history": "用量历史",
         "Daily details and account totals": "每日明细与累计统计",
