@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.7.0 — 2026-10-20
+
+- Automatically publish verified main-branch builds to GitHub Releases, including manual main builds, with permanent ZIP/checksum downloads, exact source tags and a latest-release link.
+- Limit release write permission to the main-only publish job, retain temporary artifacts for other builds, and publish only after both assets are uploaded successfully.
 
 - Merged daily analytics into the existing account history section, with one default chart and a collapsed disclosure for daily details, period summaries, lifetime totals and recent quota changes; removed the separate Analytics tab and quota chart.
 - Bounded expanded popover content to the screen height, refreshed displayed countdowns/pace on the clock and aligned the menu-bar history with account daily token usage.

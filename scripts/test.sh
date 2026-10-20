@@ -5,6 +5,8 @@ ROOT="${0:A:h:h}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+python3 "$ROOT/Tests/ReleasePublishCheck.py"
+
 swiftc \
   "$ROOT/Sources/CodexMeterCore/MeterLocalization.swift" \
   "$ROOT/Sources/CodexMeterCore/RateLimitModels.swift" \

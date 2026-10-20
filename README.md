@@ -19,7 +19,7 @@
   <a href="https://github.com/ooeooo/codex-meter/releases/latest"><img src="https://img.shields.io/badge/macOS-13%2B-17181B?logo=apple" alt="macOS 13+"></a>
   <a href="https://www.swift.org/"><img src="https://img.shields.io/badge/Swift-6-17181B?logo=swift&logoColor=white" alt="Swift 6"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-17181B" alt="MIT License"></a>
-  <a href="https://github.com/ooeooo/codex-meter/releases/latest"><img src="https://img.shields.io/github/v/release/ooeooo/codex-meter?display_name=tag&sort=semver&color=087FF5" alt="Latest release"></a>
+  <a href="https://github.com/ooeooo/codex-meter/releases/latest"><img src="https://img.shields.io/github/v/release/ooeooo/codex-meter?display_name=release&sort=date&color=087FF5" alt="Latest release"></a>
 </p>
 
 ## 中文介绍
@@ -59,7 +59,7 @@ Codex Meter 是一款免费、开源的 macOS 菜单栏应用，用于查看 **�
 
 ### 下载与安装
 
-1. 前往 [GitHub Releases](https://github.com/ooeooo/codex-meter/releases/latest)，下载最新的 `Codex-Meter-*.zip`。发布页面也提供对应的 SHA-256 校验文件。
+1. 前往 [GitHub Releases](https://github.com/ooeooo/codex-meter/releases/latest)，在 **Assets** 中下载最新的 `Codex-Meter-*.zip`。`main` 分支每次成功构建后都会自动发布，页面同时提供 SHA-256 校验文件。
 2. 解压，将 **Codex Meter.app** 放入 `/Applications`。升级时先退出旧版，再替换应用。
 3. 打开 Codex Meter，点击菜单栏图标查看用量。应用使用本机 Codex 的已有登录状态。
 4. 如需手动切换中文，展开 **Settings（设置）**，在 **Language（语言）** 中选择 **简体中文**。
@@ -263,7 +263,7 @@ open "dist/Codex Meter.app"
 
 Run `./scripts/test.sh` without the environment variable when Codex is installed and signed in to include the live integration check.
 
-GitHub Actions can build the app without a local Mac. CI uploads downloadable development packages and also supports **Actions → CI → Run workflow**. Version tags trigger tested releases with ZIP downloads and SHA-256 checksums; existing tags can also be released manually. See [Build and release with GitHub Actions](docs/build-and-release.md) for instructions.
+GitHub Actions can build the app without a local Mac. Successful `main` builds automatically publish a new GitHub Release with the universal ZIP and SHA-256 checksum, including manual **Actions → CI → Run workflow** runs on `main`. Each build keeps its own download and becomes the latest Release. Pull requests and other branches retain temporary workflow artifacts. Version tags also support tested versioned releases; existing tags can be released manually. See [Build and release with GitHub Actions](docs/build-and-release.md) for instructions.
 
 ## Why open source?
 

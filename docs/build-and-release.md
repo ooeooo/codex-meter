@@ -4,19 +4,24 @@ The workflows build on `macos-15` with the installed Swift toolchain. They produ
 
 The app is ad-hoc signed, not Apple-notarized. Linux can edit this repository but cannot perform the full macOS build or packaging workflow.
 
-## Download a development build
+## Download an automatically published build
 
-CI runs for pushes to `main` and pull requests. To build another branch manually:
+Every successful push build on `main` publishes its verified macOS ZIP and SHA-256 checksum directly to [GitHub Releases](https://github.com/ooeooo/codex-meter/releases/latest). A manually started **Actions → CI → Run workflow** build also publishes when the selected branch is `main`.
 
-1. Push the branch to GitHub.
-2. Open the repository's **Actions** tab and select **CI**.
-3. Choose **Run workflow**, select the branch and run it. The workflow must first exist on the default branch for the manual button to appear.
-4. Open the successful run and download `codex-meter-macos-<run-number>-<attempt>` from **Artifacts**.
-5. Extract the artifact download. It contains `Codex-Meter-<version>-ci-<run-number>-<commit>.zip` and its `.zip.sha256` file. Verify the checksum, then extract the inner ZIP to install the app or CLI.
+1. Open **Releases** or **Download latest** in the README.
+2. Select `Codex-Meter-<version>-ci-<run-number>-<commit>.zip` under **Assets**.
+3. Download the matching `.zip.sha256` file if you want to verify the checksum.
+4. Extract the ZIP to install the app or CLI. There is no extra workflow-artifact ZIP around the installer.
 
-Development artifacts are retained for 14 days and require GitHub access to download. A CI or manual development build does not create a GitHub Release.
+Each publication uses its own `build-<run-number>-<attempt>-<commit>` tag pinned to the tested source commit, preserves previous releases, and becomes the latest download. Failed tests, failed package verification, pull requests and manual builds from other branches do not publish a Release. The publish job downloads the exact build job's artifact, checks its checksum again, uploads both files to a draft, then makes the Release public. Main builds finish publishing before the next main run starts; newer pushes do not cancel an upload midway. Reruns use a new attempt in the tag and never overwrite an older Release.
 
-## Publish a version
+The automatic token has `contents: write` only in the main-only publish job. The build job and pull-request workflows retain read-only repository permissions. A generated build tag does not match the `v*` release trigger, so it does not start another build.
+
+## Workflow artifact fallback
+
+CI still retains `codex-meter-macos-<run-number>-<attempt>` under **Actions → CI → the run → Artifacts** for 14 days. This also provides downloads for pull requests and non-main manual builds. Extracting an artifact produces the installer ZIP and checksum. These temporary artifacts require GitHub access; published Release assets do not expire with the artifact retention period.
+
+## Publish a version tag
 
 1. Update `CFBundleShortVersionString` and `CFBundleVersion` in `Resources/Info.plist`, update the changelog and commit the changes.
 2. Push the release commit and wait for CI to pass.
