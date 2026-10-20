@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var statusItem: NSStatusItem!
     private var cancellables = Set<AnyCancellable>()
     private var previewWindow: NSWindow?
+    private var meterController: NSHostingController<MeterView>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let previewMode = ProcessInfo.processInfo.arguments.contains("--preview")
@@ -38,17 +39,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         popover.behavior = .transient
         popover.animates = true
         popover.delegate = self
-        popover.contentViewController = NSHostingController(rootView: MeterView(store: store))
+        preparePopover()
 
         if previewMode {
+            let size = MeterPanelLayout.size(visibleHeight: NSScreen.main?.visibleFrame.height)
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 348, height: 680),
+                contentRect: NSRect(origin: .zero, size: size),
                 styleMask: [.titled, .closable, .miniaturizable],
                 backing: .buffered,
                 defer: false
             )
             window.title = "Codex Meter"
-            window.contentViewController = NSHostingController(rootView: MeterView(store: store))
+            window.contentViewController = MeterPanelLayout.controller(store: store, size: size)
             window.center()
             window.makeKeyAndOrderFront(nil)
             previewWindow = window
@@ -101,9 +103,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if popover.isShown {
             popover.performClose(nil)
         } else {
+            preparePopover()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+
+    private func preparePopover() {
+        let screen = statusItem.button?.window?.screen ?? NSScreen.main
+        let size = MeterPanelLayout.size(visibleHeight: screen?.visibleFrame.height)
+        if let meterController {
+            meterController.rootView = MeterView(store: store, panelHeight: size.height)
+            meterController.preferredContentSize = size
+            meterController.view.setFrameSize(size)
+        } else {
+            let controller = MeterPanelLayout.controller(store: store, size: size)
+            meterController = controller
+            popover.contentViewController = controller
+        }
+        popover.contentSize = size
     }
 
     @objc private func refresh() {

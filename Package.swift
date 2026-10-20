@@ -20,6 +20,11 @@ let package = Package(
             name: "CodexMeterCLI",
             dependencies: ["CodexMeterCore"],
             path: "Sources/CodexMeterCLI"
+        ),
+        .testTarget(
+            name: "CodexMeterLayoutTests",
+            dependencies: ["CodexMeter", "CodexMeterCore"],
+            path: "Tests/Layout"
         )
     ]
 )

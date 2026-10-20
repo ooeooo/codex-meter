@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7.1 — 2026-10-20
+
+- Fixed popovers showing only the header by removing content-height feedback and setting an explicit, screen-bounded viewport before presentation.
+- Kept daily details and settings scrollable without resizing the viewport; clock updates now refresh state without a TimelineView inside the scroll document.
+- Added macOS layout checks for first opening, reopening, empty/populated data, smaller screens and scrolling to the end of expanded content.
+
 ## 1.7.0 — 2026-10-20
 
 - Automatically publish verified main-branch builds to GitHub Releases, including manual main builds, with permanent ZIP/checksum downloads, exact source tags and a latest-release link.

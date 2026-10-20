@@ -1,37 +1,24 @@
 import AppKit
+import Combine
 import CodexMeterCore
 import SwiftUI
 
 struct MeterView: View {
     @ObservedObject var store: UsageStore
+    var panelHeight: CGFloat = MeterPanelLayout.preferredHeight
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("usageWindowsExpanded") private var usageWindowsExpanded = true
     @AppStorage("settingsExpanded") private var settingsExpanded = false
-    @State private var contentHeight: CGFloat = 480
+    @State private var now = Date()
 
     var body: some View {
         ZStack(alignment: .top) {
-            VStack(spacing: 0) {
+            MeterPanel(height: panelHeight) {
                 header
+            } content: {
+                content(now: now)
                 Divider()
-                ScrollView {
-                    VStack(spacing: 0) {
-                        TimelineView(.periodic(from: .now, by: 30)) { context in
-                            content(now: context.date)
-                        }
-                        Divider()
-                        settings
-                    }
-                    .background {
-                        GeometryReader { proxy in
-                            Color.clear.preference(key: MeterContentHeight.self, value: proxy.size.height)
-                        }
-                    }
-                }
-                .frame(height: min(contentHeight, max(240, (NSScreen.main?.visibleFrame.height ?? 800) - 140)))
-                .onPreferenceChange(MeterContentHeight.self) { height in
-                    Task { @MainActor in contentHeight = height }
-                }
+                settings
             }
             if let celebration = store.celebration {
                 CelebrationBanner(celebration: celebration)
@@ -43,8 +30,6 @@ struct MeterView: View {
         .id(store.language)
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: store.celebration)
         .environment(\.locale, MeterLocalization.locale)
-        .frame(width: 348)
-        .padding(.vertical, 6)
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay {
@@ -54,6 +39,7 @@ struct MeterView: View {
         .onChange(of: store.operationError) { error in
             if error != nil { settingsExpanded = true }
         }
+        .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { now = $0 }
     }
 
     private var header: some View {
@@ -413,11 +399,6 @@ private struct CelebrationBanner: View {
         .padding(.horizontal, 12)
         .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
     }
-}
-
-private struct MeterContentHeight: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
 private struct UsageRow: View {

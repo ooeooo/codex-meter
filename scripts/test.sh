@@ -105,6 +105,7 @@ swiftc \
 "$TMP/process-diagnostics-check"
 
 swift build --package-path "$ROOT"
+swift test --package-path "$ROOT" --filter MeterLayoutTests
 "$ROOT/.build/debug/codex-meter" --help >/dev/null
 mkdir -p "$TMP/expired-quota"
 set +e
