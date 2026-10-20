@@ -1,4 +1,4 @@
-import Charts
+import AppKit
 import CodexMeterCore
 import SwiftUI
 
@@ -6,30 +6,32 @@ struct MeterView: View {
     @ObservedObject var store: UsageStore
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("usageWindowsExpanded") private var usageWindowsExpanded = true
-    @AppStorage("quotaHistoryExpanded") private var quotaHistoryExpanded = true
     @AppStorage("settingsExpanded") private var settingsExpanded = false
-    @State private var showingAnalytics = false
+    @State private var contentHeight: CGFloat = 480
 
     var body: some View {
         ZStack(alignment: .top) {
             VStack(spacing: 0) {
                 header
                 Divider()
-                Picker(MeterLocalization.text("View"), selection: $showingAnalytics) {
-                    Text(MeterLocalization.text("Overview")).tag(false)
-                    Text(MeterLocalization.text("Analytics")).tag(true)
+                ScrollView {
+                    VStack(spacing: 0) {
+                        TimelineView(.periodic(from: .now, by: 30)) { context in
+                            content(now: context.date)
+                        }
+                        Divider()
+                        settings
+                    }
+                    .background {
+                        GeometryReader { proxy in
+                            Color.clear.preference(key: MeterContentHeight.self, value: proxy.size.height)
+                        }
+                    }
                 }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                if showingAnalytics {
-                    AccountUsageAnalyticsView(store: store)
-                        .id(store.activeAccountID)
-                } else {
-                    content
+                .frame(height: min(contentHeight, max(240, (NSScreen.main?.visibleFrame.height ?? 800) - 140)))
+                .onPreferenceChange(MeterContentHeight.self) { height in
+                    Task { @MainActor in contentHeight = height }
                 }
-                Divider()
-                settings
             }
             if let celebration = store.celebration {
                 CelebrationBanner(celebration: celebration)
@@ -76,10 +78,7 @@ struct MeterView: View {
             Spacer()
             accountMenu
             Button {
-                Task {
-                    await store.refresh()
-                    await store.refreshAnalytics(force: true)
-                }
+                Task { await store.refreshAll() }
             } label: {
                 if store.isRefreshing || store.isLoadingAnalytics {
                     ProgressView().controlSize(.small)
@@ -148,10 +147,10 @@ struct MeterView: View {
     }
 
     @ViewBuilder
-    private var content: some View {
+    private func content(now: Date) -> some View {
         VStack(spacing: 0) {
             DisclosureGroup(isExpanded: $usageWindowsExpanded) {
-                quotaContent
+                quotaContent(now: now)
             } label: {
                 SectionLabel(title: MeterLocalization.text("Usage windows"), detail: store.activeAccountName)
             }
@@ -163,27 +162,8 @@ struct MeterView: View {
                     .stroke(Color.white.opacity(colorScheme == .dark ? 0.08 : 0.3), lineWidth: 0.6)
             }
             Divider()
-            DisclosureGroup(isExpanded: $quotaHistoryExpanded) {
-                if let history = store.quotaHistory {
-                    AccountQuotaHistoryView(history: history)
-                        .padding(.top, 10)
-                } else {
-                    Text(MeterLocalization.text("History starts with the first successful account quota read."))
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, 10)
-                }
-                if let error = store.historyError {
-                    Text(error)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 6)
-                }
-            } label: {
-                SectionLabel(title: MeterLocalization.text("Account quota history"), detail: MeterLocalization.text("All devices"))
-            }
+            AccountUsageHistoryView(store: store, now: now)
+            .id(store.activeAccountID)
             .padding(16)
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay {
@@ -194,7 +174,7 @@ struct MeterView: View {
     }
 
     @ViewBuilder
-    private var quotaContent: some View {
+    private func quotaContent(now: Date) -> some View {
         if store.payload == nil && store.isRefreshing {
             VStack(spacing: 10) {
                 ProgressView()
@@ -241,7 +221,7 @@ struct MeterView: View {
                     : MeterLocalization.text("Available reset counts can change through grants, use or expiry; a count change does not prove a reset."))
                 Divider().padding(.leading, 16)
                 ForEach(Array(store.windows.enumerated()), id: \.offset) { index, window in
-                    UsageRow(window: window, now: store.payload?.fetchedAt ?? Date())
+                    UsageRow(window: window, now: now, isStale: store.isStale || store.errorMessage != nil)
                     if index < store.windows.count - 1 { Divider().padding(.leading, 16) }
                 }
                 if let error = store.errorMessage {
@@ -435,103 +415,17 @@ private struct CelebrationBanner: View {
     }
 }
 
-private struct AccountQuotaHistoryView: View {
-    let history: AccountQuotaHistory
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(MeterLocalization.text("Seven days · checks every two minutes"))
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-            if history.chartPoints.isEmpty {
-                Text(MeterLocalization.text("Percentage quota was not provided for this account."))
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-            } else {
-                quotaChart
-            }
-
-            if history.observations.count == 1 {
-                Text(MeterLocalization.text("First snapshot saved. Changes will appear after the next read."))
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(Array(history.recentChanges.prefix(2))) { observation in
-                changeRow(observation)
-            }
-            Text(MeterLocalization.text("Account snapshots include cloud and other devices. Gaps and resets break the line; usage across resets cannot be recovered."))
-                .font(.system(size: 9))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private var quotaChart: some View {
-        Chart(history.chartPoints) { point in
-            LineMark(
-                x: .value(MeterLocalization.text("Time"), point.date),
-                y: .value(MeterLocalization.text("Remaining quota"), point.remainingPercent),
-                series: .value("Series", point.series)
-            )
-            .foregroundStyle(by: .value(MeterLocalization.text("Usage window"), point.displayName))
-            .symbol(.circle)
-            .symbolSize(6)
-        }
-        .chartYScale(domain: 0...100)
-        .chartYAxis {
-            AxisMarks(values: [0, 50, 100]) { value in
-                AxisValueLabel {
-                    if let percent = value.as(Int.self) { Text("\(percent)%") }
-                }
-            }
-        }
-        .chartXAxis { AxisMarks(values: .automatic(desiredCount: 3)) }
-        .chartForegroundStyleScale(range: [Color.accentColor, Color.orange])
-        .frame(height: 90)
-        .accessibilityLabel(MeterLocalization.text("Account remaining quota history"))
-    }
-
-    private func changeRow(_ observation: AccountQuotaObservation) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(intervalText(observation))
-                .foregroundStyle(.secondary)
-            ForEach(observation.changes.filter { $0.kind != .unchanged && $0.kind != .baseline }) { change in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(change.summary)
-                    if let detail = change.resetDetail {
-                        Text(detail)
-                            .font(.system(size: 9))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            if observation.balanceChanged, let previous = observation.previousCredits,
-               let current = observation.payload.snapshot.credits {
-                Text(MeterLocalization.format("Credits: %@ → %@", previous.displayBalance, current.displayBalance))
-            }
-            if observation.resetCreditsChanged, let previous = observation.previousResetCredits,
-               let current = observation.payload.availableResetCredits {
-                Text(MeterLocalization.format("Banked resets: %d → %d", previous, current))
-            }
-            if observation.hasGap {
-                Text(MeterLocalization.text("Includes an unobserved interval; device and exact usage times are unknown."))
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .font(.system(size: 10))
-        .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private func intervalText(_ observation: AccountQuotaObservation) -> String {
-        let end = observation.payload.fetchedAt.formatted(.dateTime.month().day().hour().minute().locale(MeterLocalization.locale))
-        guard let start = observation.previousFetchedAt else { return end }
-        return start.formatted(.dateTime.month().day().hour().minute().locale(MeterLocalization.locale)) + " → " + end
-    }
+private struct MeterContentHeight: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
 private struct UsageRow: View {
     let window: RateLimitWindow
     let now: Date
+    let isStale: Bool
+
+    private var awaitingReset: Bool { window.isAwaitingReset(at: now) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -546,16 +440,16 @@ private struct UsageRow: View {
                                 .foregroundStyle(meterColor)
                         }
                     }
-                    Text(ResetTimeFormatter.relativeText(for: window.resetsAt))
+                    Text(awaitingReset ? MeterLocalization.text("Awaiting quota update") : ResetTimeFormatter.relativeText(for: window.resetsAt, now: now))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 1) {
-                    Text("\(window.remainingPercent)%")
+                    Text(awaitingReset ? "—" : "\(window.remainingPercent)%")
                         .font(.system(size: 22, weight: .semibold, design: .rounded))
                         .monospacedDigit()
-                    Text(MeterLocalization.text("remaining"))
+                    Text(MeterLocalization.text(isStale || awaitingReset ? "Last reported" : "remaining"))
                         .font(.system(size: 9, weight: .medium))
                         .foregroundStyle(.secondary)
                     if let absoluteReset = ResetTimeFormatter.absoluteText(for: window.resetsAt) {
@@ -565,10 +459,15 @@ private struct UsageRow: View {
                     }
                 }
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel(MeterLocalization.format("%d percent remaining", window.remainingPercent))
+                .accessibilityLabel(awaitingReset ? MeterLocalization.text("Awaiting quota update") : MeterLocalization.format("%d percent remaining", window.remainingPercent))
             }
 
-            UsageProgressBar(remainingPercent: window.remainingPercent, color: meterColor)
+            if awaitingReset {
+                Text(MeterLocalization.format("Last reported: %d%% remaining", window.remainingPercent))
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            } else {
+                UsageProgressBar(remainingPercent: window.remainingPercent, color: meterColor)
                 .animation(.easeInOut(duration: 0.45), value: window.remainingPercent)
                 .accessibilityLabel(window.displayName)
                 .accessibilityValue([
@@ -576,8 +475,9 @@ private struct UsageRow: View {
                     ResetTimeFormatter.relativeText(for: window.resetsAt),
                     ResetTimeFormatter.absoluteText(for: window.resetsAt)
                 ].compactMap { $0 }.joined(separator: " "))
+            }
 
-            if let pace = WeeklyPace(window: window, now: now) {
+            if !isStale, let pace = WeeklyPace(window: window, now: now) {
                 Divider()
                 WeeklyPaceView(pace: pace)
             }
@@ -586,12 +486,15 @@ private struct UsageRow: View {
     }
 
     private var meterColor: Color {
+        if awaitingReset || isStale { return .secondary }
         if window.remainingPercent <= 10 { return .red }
         if window.remainingPercent <= 25 { return .orange }
         return .accentColor
     }
 
     private var warningText: String? {
+        if isStale { return MeterLocalization.text("Out of date") }
+        if awaitingReset { return nil }
         if window.remainingPercent <= 10 { return MeterLocalization.text("Nearly exhausted") }
         if window.remainingPercent <= 25 { return MeterLocalization.text("Running low") }
         return nil

@@ -31,8 +31,8 @@ Codex Meter 是一款免费、开源的 macOS 菜单栏应用，用于查看 **�
 ### 主要功能
 
 - **余量与重置时间**：菜单栏显示各配额窗口中最低的剩余比例，展开后可分别查看各窗口和重置时间。
-- **账号余量历史**：每两分钟读取并保存账号快照，包含云端和其他设备的使用变化；重启后同周期内的余量下降也会记录。
-- **每日用量分析**：在“分析”页切换最近 7 天／30 天，查看账号每日 token 图表、期间合计与单日峰值；支持日期查找、用量升降序和仅看有用量日期。
+- **账号用量历史**：在原账号历史区域直接显示每日 token 图表，支持最近 7 天／30 天；默认只显示一个图表。
+- **展开每日明细**：点击“每日明细与累计统计”，查看期间合计、单日峰值、账号累计统计及近期配额变化；支持日期查找、用量升降序和仅看有用量日期。
 - **重置与停机处理**：按配额窗口和重置时间区分周期，余量回升或跨周期时提示重置或调整，无法还原的区间标为未知。
 - **余额与重置次数**：显示服务返回的积分余额、可用重置次数；未返回的数据明确显示为未提供。
 - **自动刷新与提醒**：每两分钟刷新配额，支持手动重试、低余量提醒和登录时启动。
@@ -86,7 +86,7 @@ Codex Meter 是一款免费、开源的 macOS 菜单栏应用，用于查看 **�
 
 **如何查看 Codex 设置中那样的每日分析？**
 
-点击顶部的 **分析**，选择 **7 天** 或 **30 天**。图表及合计覆盖所选时间范围；在每日明细中可按日期查找、切换日期或用量排序，以及勾选“仅看有用量”。点击明细行可在图中突出对应日期。分析通过 `account/usage/read` 直接获取账号历史，不依赖程序此前是否运行，也不从配额百分点推算 token。
+在 **账号用量历史** 中选择 **7 天** 或 **30 天**，默认直接显示图表，无需切换分析页面。点击 **每日明细与累计统计** 展开期间合计、单日峰值、每日明细和账号累计统计；可按日期查找、切换日期或用量排序，以及勾选“仅看有用量”。点击明细行可在图中突出对应日期。分析通过 `account/usage/read` 直接获取账号历史，不依赖程序此前是否运行，也不从配额百分点推算 token。
 
 每日统计每十分钟刷新，也可手动刷新。日期沿用 Codex 返回的统计日期，所选范围包含今天；未返回的日期标为“未提供”，部分覆盖时合计仅包含已返回的天数。当前接口没有模型、项目、来源或货币账单字段。旧版本若不支持账号分析，会提示更新 Codex，并保留正常的配额显示。
 
@@ -156,20 +156,20 @@ Alert thresholds, menu-bar modes, account history and CLI automation stay on you
 - Detects stale or unavailable data instead of leaving a misleading old number visible.
 - Uses the existing default Codex sign-in without requiring a separate Meter profile, and offers sanitized copyable diagnostics when refresh fails.
 - Persists seven days of account-wide quota snapshots, isolated by verified account identity and profile.
-- Adds an Analytics tab with 7-day/30-day account token charts, period totals, daily peaks, date lookup, usage sorting and an active-days filter. Daily analytics refresh every ten minutes and can recover server history from times when Meter was not running.
+- Shows one 7-day/30-day account token chart in the account history section. Daily details, period totals, peaks, lifetime statistics and recent quota changes expand together; date lookup, usage sorting and an active-days filter are available inside. Daily history refreshes every ten minutes and can recover server history from times when Meter was not running.
 - Keeps missing daily records visibly unavailable and separates period statistics from account lifetime totals.
 - Recovers net quota decreases after restarting within the same cycle and labels unobserved intervals.
-- Breaks chart lines across gaps, resets and allowance changes instead of inventing cross-cycle consumption.
+- Marks gaps, resets and allowance changes without inventing cross-cycle consumption; expired windows wait for fresh quota before displaying a current percentage.
 - Displays backend-reported credits separately from percentage quota; missing values remain unavailable.
 - Adds accounts through OpenAI's secure browser login, then hot-swaps profiles from the account menu beside refresh.
 - Asks whether each profile change should affect Meter only or Meter plus the Codex desktop app.
 - For a desktop swap, signs Codex out through the official app-server method, completes OpenAI's browser login, verifies the account and relaunches Codex.
 - Deletes unused local account profiles and their saved Codex credentials with confirmation, including stale records whose folder is already gone.
 - Shows OpenAI's real banked-reset count when available. Changes in this count alone do not prove a reset.
-- Switches between icon + percentage, reset + percentage, percentage-only, icon-only and quota-history menu-bar modes.
+- Switches between icon + percentage, reset + percentage, percentage-only, icon-only and daily-usage-history menu-bar modes.
 - Includes a universal `codex-meter` CLI with stable text/JSON output and threshold exit codes.
 - Supports launch at login without adding a Dock icon.
-- Keeps usage windows, quota history, accounts and settings collapsible so the popover stays calm.
+- Keeps daily details and settings collapsed by default and scrolls expanded content within the available screen height.
 - Works natively on Apple silicon and Intel Macs.
 
 ## Download and install

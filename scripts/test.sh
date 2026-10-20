@@ -104,6 +104,16 @@ swiftc \
 
 swift build --package-path "$ROOT"
 "$ROOT/.build/debug/codex-meter" --help >/dev/null
+mkdir -p "$TMP/expired-quota"
+set +e
+CODEX_PATH="$TMP/app-server-handshake-check" CODEX_HOME="$TMP/expired-quota" \
+  "$ROOT/.build/debug/codex-meter" status --json >"$TMP/expired-status.out" 2>"$TMP/expired-status.err"
+EXPIRED_EXIT=$?
+set -e
+if [[ "$EXPIRED_EXIT" -ne 1 ]] || [[ -s "$TMP/expired-status.out" ]] || ! /usr/bin/grep -q 'awaiting updated quota' "$TMP/expired-status.err"; then
+  echo "Expected expired quota to be unavailable rather than reported as current" >&2
+  exit 1
+fi
 "$ROOT/.build/debug/codex-meter" history --days 1 --json >/dev/null
 "$ROOT/.build/debug/codex-meter" history --days 1 --currency AUD --json | /usr/bin/grep -q '"currency":"AUD"'
 

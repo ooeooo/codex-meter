@@ -56,9 +56,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
 
         store.start()
-        Publishers.CombineLatest4(store.$payload, store.$errorMessage, store.$displayMode, store.$quotaHistory)
+        Publishers.CombineLatest3(store.$payload, store.$errorMessage, store.$displayMode)
             .receive(on: RunLoop.main)
-            .sink { [weak self] _, _, _, _ in self?.updateStatusItem() }
+            .sink { [weak self] _, _, _ in self?.updateStatusItem() }
+            .store(in: &cancellables)
+        Publishers.CombineLatest(store.$analytics, store.$analyticsError)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _, _ in self?.updateStatusItem() }
             .store(in: &cancellables)
         store.$language
             .receive(on: RunLoop.main)
@@ -74,7 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 .sink { [weak self] _ in
                     guard let self else { return }
                     self.updateStatusItem()
-                    Task { await self.store.refresh() }
+                    Task { await self.store.refreshAll() }
                 }
                 .store(in: &cancellables)
         }
@@ -103,15 +107,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     @objc private func refresh() {
-        Task {
-            await store.refresh()
-            await store.refreshAnalytics(force: true)
-        }
+        Task { await store.refreshAll() }
     }
     @objc private func quit() { NSApp.terminate(nil) }
 
     private func updateStatusItem() {
         guard let button = statusItem.button else { return }
+        if store.displayMode == .activity {
+            updateHistoryStatusItem(button)
+            button.setAccessibilityLabel(button.toolTip ?? MeterLocalization.text("Usage history"))
+            return
+        }
         if let window = store.menuBarWindow {
             let remaining = window.remainingPercent
             switch store.displayMode {
@@ -132,12 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 button.imagePosition = .imageOnly
                 button.title = ""
             case .activity:
-                let days = store.quotaHistory?.dailyRemainingPercent() ?? []
-                button.image = days.isEmpty
-                    ? NSImage(systemSymbolName: "chart.bar", accessibilityDescription: MeterLocalization.text("Account quota history"))
-                    : quotaHistoryImage(from: days)
-                button.imagePosition = .imageOnly
-                button.title = ""
+                break // Handled independently of quota availability above.
             }
             let countdown = ResetCountdownFormatter.format(until: window.resetsAt)
             let exactReset = window.resetsAt.map {
@@ -145,10 +146,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             } ?? ""
             let paceText = WeeklyPace(window: window).map { MeterLocalization.format(" Weekly pace: %@.", $0.summaryText) } ?? ""
             button.toolTip = MeterLocalization.format("%@: %d%% remaining. %@.%@%@", window.displayName, remaining, countdown.accessibilityText, exactReset, paceText)
-            if store.displayMode == .activity, let snapshot = store.quotaHistory?.observations.last?.payload.snapshot,
-               let historyWindow = snapshot.secondary ?? snapshot.primary {
-                button.toolTip = (button.toolTip ?? "") + "\n" + MeterLocalization.format("History: last observed %@ remaining each day. Blank days were not observed.", historyWindow.displayName)
-            }
         } else {
             button.image = NSImage(systemSymbolName: "exclamationmark.circle", accessibilityDescription: MeterLocalization.text("Codex usage unavailable"))
             button.title = "—"
@@ -156,6 +153,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 button.toolTip = MeterLocalization.format("Codex usage unavailable: %@", error)
             } else if store.isStale, let updated = store.payload?.fetchedAt {
                 button.toolTip = MeterLocalization.format("Codex usage is out of date. Last updated %@.", updated.formatted(.dateTime.hour().minute().locale(MeterLocalization.locale)))
+            } else if store.windows.contains(where: { $0.isAwaitingReset() }) {
+                button.toolTip = MeterLocalization.text("Scheduled reset passed; awaiting updated account quota.")
             } else {
                 button.toolTip = MeterLocalization.text("Checking Codex usage")
             }
@@ -234,19 +233,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         return line
     }
 
-    private func quotaHistoryImage(from days: [Int?]) -> NSImage {
+    private func updateHistoryStatusItem(_ button: NSStatusBarButton) {
+        let report = store.analytics?.report(range: .week)
+        let isStale = store.analytics.map { Date().timeIntervalSince($0.fetchedAt) > 900 } ?? false
+        button.title = ""
+        button.imagePosition = .imageOnly
+        if let report, report.reportedDays > 0, store.analyticsError == nil, !isStale {
+            button.image = usageHistoryImage(from: report.days)
+            button.toolTip = ([MeterLocalization.text("Daily account token usage")] + report.days.map { day in
+                day.day + ": " + (day.tokens.map { $0.formatted(.number.locale(MeterLocalization.locale)) } ?? MeterLocalization.text("Not reported"))
+            }).joined(separator: "\n")
+        } else {
+            button.image = NSImage(systemSymbolName: store.analyticsError != nil || isStale ? "exclamationmark.circle" : "chart.bar", accessibilityDescription: MeterLocalization.text("Usage history"))
+            button.toolTip = store.analyticsError ?? (isStale
+                ? MeterLocalization.text("Account history is out of date. Refresh to update.")
+                : MeterLocalization.text(store.analytics == nil ? "Loading account history…" : "No daily usage was reported for this period."))
+        }
+    }
+
+    private func usageHistoryImage(from days: [AccountUsageDay]) -> NSImage {
         let image = NSImage(size: NSSize(width: 22, height: 14))
         image.lockFocus()
         defer { image.unlockFocus() }
         let values = days.suffix(7)
+        let peak = Double(values.compactMap(\.tokens).max() ?? 0)
         NSColor.labelColor.setFill()
-        for (index, value) in values.enumerated() {
-            guard let value else { continue }
-            let height = max(1, 12 * Double(value) / 100)
+        for (index, day) in values.enumerated() {
+            guard let tokens = day.tokens else { continue }
+            let height = peak > 0 ? max(1, 12 * Double(tokens) / peak) : 1
             NSBezierPath(roundedRect: NSRect(x: CGFloat(index) * 3.1, y: 1, width: 2.2, height: CGFloat(height)), xRadius: 0.7, yRadius: 0.7).fill()
         }
         image.isTemplate = true
-        image.accessibilityDescription = MeterLocalization.text("Seven-day account remaining quota; blank days were not observed")
+        image.accessibilityDescription = MeterLocalization.text("Daily account token usage")
         return image
     }
 }

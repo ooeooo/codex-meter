@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Merged daily analytics into the existing account history section, with one default chart and a collapsed disclosure for daily details, period summaries, lifetime totals and recent quota changes; removed the separate Analytics tab and quota chart.
+- Bounded expanded popover content to the screen height, refreshed displayed countdowns/pace on the clock and aligned the menu-bar history with account daily token usage.
+- Decoupled quota and daily-history polling, refreshed both concurrently after wake/manual refresh and marked stale history visibly.
+- Stopped showing expired-cycle percentages or weekly pace as current, suppressed expired-cycle low-quota alerts and hardened numeric parsing/countdown arithmetic.
+- Stopped pending profile logins before deletion, ignored stale completion callbacks, restored a valid active profile after failed sign-in and fixed notification-delivery and banner-dismissal bookkeeping.
+
 - Added account-wide daily token analytics from `account/usage/read`, with 7-day/30-day views, daily details, date lookup, usage sorting and an active-days filter.
 - Kept missing days distinct from zero use, separated lifetime statistics from period totals, and isolated analytics errors and pending results during account switches.
 
@@ -9,7 +15,7 @@
 - Persisted isolated account snapshots across restarts and recorded net decreases with their original observation intervals.
 - Marked gaps, new quota cycles, replenishment and changed allowances without inventing cross-reset usage; kept missing fields unavailable.
 - Retained scheduled reset times, displayed new-cycle used percentages, and paused interval calculations while expired quota windows await a backend update.
-- Updated the menu-bar chart to daily observed remaining quota and kept optional CLI local-token history independent.
+- Updated the menu-bar chart to server-provided daily account token usage and kept optional CLI local-token history independent.
 - Added offline regression checks for persistence, downtime, reset boundaries, account isolation and storage failures.
 
 ## 1.6.2 — 2026-10-11

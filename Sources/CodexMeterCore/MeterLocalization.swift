@@ -87,6 +87,17 @@ public enum MeterLocalization {
     }
 
     private static let simplifiedChinese: [String: String] = [
+        "Account usage history": "账号用量历史",
+        "Usage history": "用量历史",
+        "Daily details and account totals": "每日明细与累计统计",
+        "Recent quota changes": "近期配额变化",
+        "No daily usage was reported for this period.": "所选时间范围内未提供每日用量。",
+        "Account history is out of date. Refresh to update.": "账号用量历史已过期，请刷新。",
+        "Awaiting quota update": "等待配额更新",
+        "Last reported": "上次读取",
+        "Last reported: %d%% remaining": "上次读取的余量：%d%%",
+        "Out of date": "数据已过期",
+        "Scheduled reset passed; awaiting updated account quota.": "已到计划重置时间，等待账号配额更新。",
         "View": "视图",
         "Overview": "概览",
         "Analytics": "分析",

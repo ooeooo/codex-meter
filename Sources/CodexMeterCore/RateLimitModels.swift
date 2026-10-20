@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 public enum CodexClientError: LocalizedError, Equatable {
     case executableNotFound
@@ -31,7 +32,11 @@ public struct RateLimitWindow: Equatable, Sendable, Codable {
         self.durationMinutes = durationMinutes
     }
 
-    public var remainingPercent: Int { max(0, min(100, 100 - usedPercent)) }
+    public var remainingPercent: Int { 100 - max(0, min(100, usedPercent)) }
+
+    public func isAwaitingReset(at now: Date = Date()) -> Bool {
+        resetsAt.map { $0 <= now } ?? false
+    }
 
     public var displayName: String {
         guard let durationMinutes, durationMinutes > 0 else { return MeterLocalization.text("Usage window") }
@@ -62,11 +67,11 @@ public struct ResetCountdown: Equatable, Sendable {
 
 public enum ResetCountdownFormatter {
     public static func format(until resetDate: Date?, now: Date = Date()) -> ResetCountdown {
-        guard let resetDate else {
+        guard let resetDate, let rawSeconds = Int(exactly: resetDate.timeIntervalSince(now).rounded(.towardZero)) else {
             return ResetCountdown(daysText: "--", hoursText: "--", accessibilityText: MeterLocalization.text("Reset time unavailable"))
         }
 
-        let secondsRemaining = max(0, Int(resetDate.timeIntervalSince(now)))
+        let secondsRemaining = max(0, rawSeconds)
         // The menu-bar badge has a fixed 17-point column; retain the compact
         // day/hour suffixes and localize its full accessibility description.
         if secondsRemaining == 0 {
@@ -109,14 +114,15 @@ public struct WeeklyPace: Equatable, Sendable, Codable {
     public init?(window: RateLimitWindow, now: Date = Date()) {
         guard let durationMinutes = window.durationMinutes,
               durationMinutes >= 9_000,
-              let resetsAt = window.resetsAt else { return nil }
+              let resetsAt = window.resetsAt, resetsAt > now,
+              resetsAt.timeIntervalSince1970.isFinite else { return nil }
 
-        let duration = TimeInterval(durationMinutes * 60)
+        let duration = TimeInterval(durationMinutes) * 60
         guard duration > 0 else { return nil }
         let start = resetsAt.addingTimeInterval(-duration)
         let elapsed = min(max(now.timeIntervalSince(start), 0), duration)
         let expected = elapsed / duration * 100
-        let actual = Double(window.usedPercent)
+        let actual = Double(100 - window.remainingPercent)
         let delta = actual - expected
 
         actualUsedPercent = actual
@@ -176,6 +182,13 @@ public struct RateLimitSnapshot: Equatable, Sendable, Codable {
         windows.min { $0.remainingPercent < $1.remainingPercent }
     }
     public var mostConstrainedRemaining: Int? { mostConstrainedWindow?.remainingPercent }
+
+    /// If one allowance has expired, the tightest current allowance is unknown
+    /// until Codex supplies the new cycle. Do not silently use the other window.
+    public func currentMostConstrainedWindow(at now: Date = Date()) -> RateLimitWindow? {
+        guard !windows.contains(where: { $0.isAwaitingReset(at: now) }) else { return nil }
+        return mostConstrainedWindow
+    }
 }
 
 /// The backend reports credits, not a currency amount or an API token balance.
@@ -281,7 +294,10 @@ public enum RateLimitParser {
     }
 
     private static func integer(_ value: Any?) -> Int? {
-        if let number = value as? NSNumber { return number.intValue }
+        if let number = value as? NSNumber {
+            guard CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+            return Int(number.stringValue) ?? Int(exactly: number.doubleValue)
+        }
         if let string = value as? String { return Int(string) }
         return nil
     }

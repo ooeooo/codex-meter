@@ -120,6 +120,21 @@ struct ParserCheck {
         let tiedSecondary = RateLimitWindow(usedPercent: 50, resetsAt: now.addingTimeInterval(86_400), durationMinutes: 10_080)
         let tied = RateLimitSnapshot(limitID: "codex", limitName: "Codex", planType: "plus", primary: tiedPrimary, secondary: tiedSecondary)
         precondition(tied.mostConstrainedWindow == tiedPrimary)
+        // Crossing a deadline makes the current account allowance unknown,
+        // including when the expired window was previously the less constrained.
+        precondition(tied.currentMostConstrainedWindow(at: now) == tiedPrimary)
+        precondition(tied.currentMostConstrainedWindow(at: tiedPrimary.resetsAt!) == nil)
+        precondition(tiedPrimary.isAwaitingReset(at: tiedPrimary.resetsAt!))
+        precondition(!RateLimitWindow(usedPercent: 50, resetsAt: nil, durationMinutes: 300).isAwaitingReset(at: now))
+        precondition(RateLimitWindow(usedPercent: Int.min, resetsAt: nil, durationMinutes: nil).remainingPercent == 100)
+        precondition(RateLimitWindow(usedPercent: Int.max, resetsAt: nil, durationMinutes: nil).remainingPercent == 0)
+        for invalid in ["true", "1.5", "9223372036854775808"] {
+            let malformed = "{\"result\":{\"rateLimits\":{\"primary\":{\"usedPercent\":\(invalid)}}}}"
+            let malformedPayload = try require(RateLimitParser.parseResponse(Data(malformed.utf8)))
+            precondition(malformedPayload.snapshot.primary == nil)
+        }
+        let invalidReset = ResetCountdownFormatter.format(until: Date(timeIntervalSince1970: .infinity), now: now)
+        precondition(invalidReset.daysText == "--")
         print("Parser checks passed")
     }
 

@@ -47,6 +47,7 @@ struct AppServerHandshakeCheck {
         }
         try await checkPackagedDesktopLayouts(root: fixtureRoot, executable: executable)
         try await checkUsageReads(root: fixtureRoot, executable: executable)
+        try await checkStopDuringLogin(root: fixtureRoot, executable: executable)
 
         for (scenario, expected) in [
             ("initialize-error", CodexClientError.server("Unsupported client capabilities")),
@@ -149,6 +150,8 @@ struct AppServerHandshakeCheck {
         let read = Task { try await client.readAccountUsage() }
         do {
             try await waitForMarker("usage-read-started", home: home)
+            // A slow history response must not serialize or block quota reads.
+            checkPayload(try await client.readRateLimits())
             await client.stop()
             do {
                 _ = try await read.value
@@ -163,6 +166,31 @@ struct AppServerHandshakeCheck {
             await client.stop()
             throw error
         }
+    }
+
+    private static func checkStopDuringLogin(root: URL, executable: URL) async throws {
+        let home = root.appendingPathComponent("stop-during-login", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let client = CodexAppServerClient(codexHome: home, executableURL: executable)
+        let login = try await client.startChatGPTLogin()
+        let wait = Task { try await client.waitForLogin(id: login.id) }
+        // Stopping is also valid if the continuation has not registered yet.
+        try await Task.sleep(for: .milliseconds(50))
+        await client.stop()
+        do {
+            try await wait.value
+            preconditionFailure("A stopped login must not complete successfully")
+        } catch let error as CodexClientError {
+            precondition(error == .disconnected)
+        }
+        do {
+            try await client.waitForLogin(id: login.id)
+            preconditionFailure("Registering a login wait after stop must fail immediately")
+        } catch let error as CodexClientError {
+            precondition(error == .disconnected)
+        }
+        checkPayload(try await client.readRateLimits())
+        await client.stop()
     }
 
     private static func checkRestartDuringInitialize(root: URL, executable: URL) async throws {
@@ -263,6 +291,9 @@ struct AppServerHandshakeCheck {
                 }
             case (1, "initialized"):
                 step = 2
+            case (2, "account/login/start"):
+                guard let id = message["id"] else { exit(22) }
+                write(["id": id, "result": ["type": "chatgpt", "loginId": "fixture-login", "authUrl": "https://auth.openai.com/fixture-login"]])
             case (2, "account/read"):
                 guard let id = message["id"] else { exit(22) }
                 write(["id": id, "result": ["account": ["type": "chatgpt", "email": "fixture@example.invalid", "planType": "plus"]]])
@@ -306,7 +337,7 @@ struct AppServerHandshakeCheck {
                                 "secondary": [
                                     "usedPercent": 44,
                                     "windowDurationMins": 10_080,
-                                    "resetsAt": 2_000_000_000
+                                    "resetsAt": scenario == "expired-quota" ? 1 : 2_000_000_000
                                 ]
                             ]
                         ]

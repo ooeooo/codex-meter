@@ -19,7 +19,7 @@ enum MenuBarDisplayMode: String, CaseIterable, Identifiable {
         case .resetAndPercentage: return MeterLocalization.text("Reset + percentage")
         case .percentage: return MeterLocalization.text("Percentage only")
         case .icon: return MeterLocalization.text("Icon only")
-        case .activity: return MeterLocalization.text("Quota history")
+        case .activity: return MeterLocalization.text("Usage history")
         }
     }
 }
@@ -84,10 +84,12 @@ final class UsageStore: ObservableObject {
     private let quotaHistoryStore = AccountQuotaHistoryStore()
     private let previewMode: Bool
     private var pollingTask: Task<Void, Never>?
+    private var analyticsPollingTask: Task<Void, Never>?
     private var analyticsGeneration = UUID()
     private var analyticsAccountKey: String?
     private var lastAnalyticsAttemptAt: Date?
     private var loginTasks: [UUID: Task<Void, Never>] = [:]
+    private var loginClients: [UUID: CodexAppServerClient] = [:]
     private var pendingNotificationIDs = Set<String>()
     private var lastUsageDiagnostics: String?
     // Retain message sources for language changes; renderers capture local values,
@@ -98,6 +100,7 @@ final class UsageStore: ObservableObject {
     private var analyticsErrorRenderer: (() -> String?)?
     private var accountSwitchStatusRenderer: (() -> String?)?
     private var celebrationRenderer: (() -> Celebration?)?
+    private var celebrationGeneration = UUID()
     private static let languageKey = "appLanguage"
     private static let thresholdKey = "alertThreshold"
     private static let notifiedResetKey = "lastNotifiedReset"
@@ -186,11 +189,11 @@ final class UsageStore: ObservableObject {
     var bankedResetCount: Int? { payload?.availableResetCredits }
     var menuBarRemaining: Int? {
         guard errorMessage == nil, !isStale else { return nil }
-        return payload?.snapshot.mostConstrainedRemaining
+        return menuBarWindow?.remainingPercent
     }
     var menuBarWindow: RateLimitWindow? {
         guard errorMessage == nil, !isStale else { return nil }
-        return payload?.snapshot.mostConstrainedWindow
+        return payload?.snapshot.currentMostConstrainedWindow()
     }
     var planLabel: String? {
         payload?.snapshot.planType?.replacingOccurrences(of: "_", with: " ").capitalized
@@ -240,6 +243,7 @@ final class UsageStore: ObservableObject {
     }
 
     private func setCelebration(_ render: @autoclosure @escaping () -> Celebration?) {
+        celebrationGeneration = UUID()
         celebrationRenderer = render
         celebration = render()
     }
@@ -306,6 +310,7 @@ final class UsageStore: ObservableObject {
         UserDefaults.standard.set(appURL.path, forKey: Self.selectedCodexAppKey)
         setOperationError(nil)
         pollingTask?.cancel()
+        analyticsPollingTask?.cancel()
         let previousClient = rebuildCurrentClient()
         let nextClient = client
         let generation = clientGeneration
@@ -324,28 +329,41 @@ final class UsageStore: ObservableObject {
     func start() {
         guard !previewMode else { return }
         pollingTask?.cancel()
+        analyticsPollingTask?.cancel()
         pollingTask = Task {
-            await refresh()
-            await refreshAnalytics()
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(120))
-                guard !Task.isCancelled else { break }
                 await refresh()
+                try? await Task.sleep(for: .seconds(120))
+            }
+        }
+        analyticsPollingTask = Task {
+            while !Task.isCancelled {
                 await refreshAnalytics()
+                try? await Task.sleep(for: .seconds(600))
             }
         }
     }
 
+    func refreshAll() async {
+        async let quota: Void = refresh()
+        async let history: Void = refreshAnalytics(force: true)
+        _ = await (quota, history)
+    }
+
     func refresh() async {
-        guard !isRefreshing else { return }
+        guard !previewMode, !Task.isCancelled, !isRefreshing else { return }
         let previousClient = rediscoverClientOnNextRefresh ? rebuildCurrentClient() : nil
         let requestClient = client
         let generation = clientGeneration
         let accountID = activeAccountID
+        var shouldRefreshAnalytics = false
         isRefreshing = true
         defer {
             if isCurrentRequest(client: requestClient, accountID: accountID, generation: generation) {
                 isRefreshing = false
+                if shouldRefreshAnalytics {
+                    Task { await refreshAnalytics() }
+                }
             }
         }
         if let previousClient {
@@ -356,7 +374,10 @@ final class UsageStore: ObservableObject {
             let accountBefore = try? await requestClient.readAccount()
             let newPayload = try await requestClient.readRateLimits()
             guard isCurrentRequest(client: requestClient, accountID: accountID, generation: generation) else { return }
-            if let key = analyticsAccountKey, Self.analyticsIdentity(for: accountBefore) != key { clearAnalytics() }
+            if let key = analyticsAccountKey, Self.analyticsIdentity(for: accountBefore) != key {
+                clearAnalytics()
+                shouldRefreshAnalytics = true
+            }
             payload = newPayload
             setErrorMessage(newPayload.snapshot.windows.isEmpty ? MeterLocalization.text("No Codex rate-limit windows were returned for this account.") : nil)
             if newPayload.snapshot.windows.isEmpty && newPayload.snapshot.credits == nil && newPayload.availableResetCredits == nil {
@@ -384,7 +405,10 @@ final class UsageStore: ObservableObject {
             }
             var previousAccountPayload: RateLimitPayload?
             if let identity {
-                if let previousIdentity = quotaHistory?.accountKey, previousIdentity != identity { clearAnalytics() }
+                if let previousIdentity = quotaHistory?.accountKey, previousIdentity != identity {
+                    clearAnalytics()
+                    shouldRefreshAnalytics = true
+                }
                 previousAccountPayload = quotaHistory.flatMap { $0.accountKey == identity ? $0.observations.last?.payload : nil }
                 do {
                     let history = try await quotaHistoryStore.record(newPayload, profileID: accountID, accountKey: identity)
@@ -420,7 +444,7 @@ final class UsageStore: ObservableObject {
     /// Account history is fetched independently of quota. Unsupported analytics
     /// and analytics failures never make a successful quota read fail.
     func refreshAnalytics(force: Bool = false) async {
-        guard !previewMode, !isLoadingAnalytics else { return }
+        guard !previewMode, !Task.isCancelled, !isLoadingAnalytics else { return }
         if !force, let lastAnalyticsAttemptAt, Date().timeIntervalSince(lastAnalyticsAttemptAt) < 600 { return }
         let requestClient = client
         let generation = clientGeneration
@@ -550,6 +574,7 @@ final class UsageStore: ObservableObject {
     private func switchMeterAccount(to id: UUID) {
         guard let profile = accounts.first(where: { $0.id == id }), id != activeAccountID else { return }
         pollingTask?.cancel()
+        analyticsPollingTask?.cancel()
         let previousClient = client
         let generation = UUID()
         clientGeneration = generation
@@ -573,6 +598,7 @@ final class UsageStore: ObservableObject {
     }
 
     func addAccount() {
+        guard !isSwitchingCodexAccount else { return }
         let alert = NSAlert()
         alert.messageText = MeterLocalization.text("Add Codex account")
         alert.informativeText = MeterLocalization.text("Choose a label. Codex Meter will open OpenAI's secure browser sign-in for a private profile on this Mac. Passwords and verification codes stay on OpenAI's page.")
@@ -610,6 +636,7 @@ final class UsageStore: ObservableObject {
     }
 
     func deleteAccount(id: UUID) {
+        guard !isSwitchingCodexAccount else { return }
         guard let profile = accounts.first(where: { $0.id == id }), let home = profile.homeURL else { return }
         let wasActive = profile.id == activeAccountID
         let alert = NSAlert()
@@ -621,9 +648,12 @@ final class UsageStore: ObservableObject {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
         setOperationError(nil)
+        loginTasks.removeValue(forKey: profile.id)?.cancel()
+        let pendingLoginClient = loginClients.removeValue(forKey: profile.id)
         let deletionClient = client
         if wasActive {
             pollingTask?.cancel()
+            analyticsPollingTask?.cancel()
             clientGeneration = UUID()
             rediscoverClientOnNextRefresh = false
             payload = nil
@@ -636,9 +666,9 @@ final class UsageStore: ObservableObject {
         }
         let deletionGeneration = clientGeneration
         Task {
+            if let pendingLoginClient { await pendingLoginClient.stop() }
             if wasActive { await deletionClient.stop() }
             do {
-                loginTasks.removeValue(forKey: profile.id)?.cancel()
                 try AccountProfileStorage.removeLocalProfile(at: home)
                 var historyCleanupFailed = false
                 do {
@@ -674,20 +704,36 @@ final class UsageStore: ObservableObject {
         guard let home = profile.homeURL else { return }
         setOperationError(nil)
         loginTasks[profile.id]?.cancel()
+        let previousLoginClient = loginClients[profile.id]
+        let loginClient = Self.makeClient(codexHome: home)
+        loginClients[profile.id] = loginClient
         loginTasks[profile.id] = Task { [weak self] in
             guard let self else { return }
-            let loginClient = Self.makeClient(codexHome: home)
+            @MainActor func checkCurrentLogin() throws {
+                guard !Task.isCancelled, self.loginClients[profile.id] === loginClient,
+                      self.accounts.contains(where: { $0.id == profile.id }) else { throw CancellationError() }
+            }
+            defer {
+                if self.loginClients[profile.id] === loginClient {
+                    self.loginClients.removeValue(forKey: profile.id)
+                    self.loginTasks.removeValue(forKey: profile.id)
+                }
+            }
             do {
+                if let previousLoginClient { await previousLoginClient.stop() }
+                try checkCurrentLogin()
                 let login = try await loginClient.startChatGPTLogin()
+                try checkCurrentLogin()
                 guard NSWorkspace.shared.open(login.authorizationURL) else {
                     throw CodexClientError.server("The OpenAI sign-in page could not be opened in your browser.")
                 }
                 try await loginClient.waitForLogin(id: login.id)
+                try checkCurrentLogin()
                 guard let account = try await loginClient.readAccount(refreshToken: true) else {
                     throw CodexClientError.server("Codex did not report a signed-in account after login.")
                 }
                 await loginClient.stop()
-                self.loginTasks.removeValue(forKey: profile.id)
+                try checkCurrentLogin()
                 if let index = self.accounts.firstIndex(where: { $0.id == profile.id }) {
                     self.accounts[index].email = account.email
                     self.persistAccounts()
@@ -699,10 +745,13 @@ final class UsageStore: ObservableObject {
                 await loginClient.stop()
             } catch {
                 await loginClient.stop()
-                self.loginTasks.removeValue(forKey: profile.id)
+                guard (try? checkCurrentLogin()) != nil else { return }
                 self.accounts.removeAll { $0.id == profile.id }
                 self.persistAccounts()
                 try? AccountProfileStorage.removeLocalProfile(at: home)
+                if self.activeAccountID == profile.id, let fallback = self.accounts.first {
+                    self.switchMeterAccount(to: fallback.id)
+                }
                 self.setOperationError(MeterLocalization.format("OpenAI sign-in failed: %@", (error as? LocalizedError)?.errorDescription ?? error.localizedDescription))
             }
         }
@@ -793,16 +842,20 @@ final class UsageStore: ObservableObject {
     }
 
     private func dismissCelebration() {
-        Task { try? await Task.sleep(for: .seconds(4)); setCelebration(nil) }
+        let generation = celebrationGeneration
+        Task {
+            try? await Task.sleep(for: .seconds(4))
+            if celebrationGeneration == generation { setCelebration(nil) }
+        }
     }
 
     private func notifyIfNeeded(_ payload: RateLimitPayload, accountID: UUID, generation: UUID) async {
         guard clientGeneration == generation, activeAccountID == accountID,
-              let constrained = payload.snapshot.windows.min(by: { $0.remainingPercent < $1.remainingPercent }),
+              let constrained = payload.snapshot.currentMostConstrainedWindow(),
               constrained.remainingPercent <= alertThreshold else { return }
 
         let fallbackBucket = Int(Date().timeIntervalSince1970 / 86_400)
-        let resetComponent = constrained.resetsAt.map { Int($0.timeIntervalSince1970) } ?? fallbackBucket
+        let resetComponent = constrained.resetsAt.flatMap { Int(exactly: $0.timeIntervalSince1970.rounded(.towardZero)) } ?? fallbackBucket
         let identity = payload.accountID ?? quotaHistory?.accountKey ?? accountID.uuidString
         let resetID = "\(identity)-\(constrained.durationMinutes ?? 0)-\(resetComponent)-\(alertThreshold)"
         guard UserDefaults.standard.string(forKey: Self.notifiedResetKey) != resetID,
@@ -816,14 +869,17 @@ final class UsageStore: ObservableObject {
 
         let center = UNUserNotificationCenter.current()
         let granted = (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
-        guard granted, clientGeneration == generation, activeAccountID == accountID else { return }
+        guard granted, clientGeneration == generation, activeAccountID == accountID,
+              self.payload == payload, !constrained.isAwaitingReset() else { return }
 
         let content = UNMutableNotificationContent()
         content.title = MeterLocalization.text("Codex usage is running low")
         content.body = MeterLocalization.format("%d%% remains. %@", constrained.remainingPercent, ResetTimeFormatter.notificationText(for: constrained.resetsAt))
         content.sound = .default
-        try? await center.add(UNNotificationRequest(identifier: "codex-meter-low-\(resetID)", content: content, trigger: nil))
-        guard clientGeneration == generation, activeAccountID == accountID else { return }
+        do {
+            try await center.add(UNNotificationRequest(identifier: "codex-meter-low-\(resetID)", content: content, trigger: nil))
+        } catch { return }
+        guard clientGeneration == generation, activeAccountID == accountID, self.payload == payload else { return }
         UserDefaults.standard.set(resetID, forKey: Self.notifiedResetKey)
     }
 }

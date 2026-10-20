@@ -36,14 +36,17 @@ enum WeeklyPaceCheck {
         precondition(under.severity == .belowPace)
 
         precondition(pace(used: 100, elapsedFraction: 0).markerPosition == 1)
-        precondition(pace(used: 0, elapsedFraction: 1).markerPosition == -1)
+        precondition(pace(used: 0, elapsedFraction: 0.999).markerPosition == -1)
 
         let expired = WeeklyPace(
             window: RateLimitWindow(usedPercent: 100, resetsAt: reset, durationMinutes: durationMinutes),
             now: reset.addingTimeInterval(3_600)
-        )!
-        precondition(expired.expectedUsedPercent == 100)
-        precondition(expired.summaryText == "On pace")
+        )
+        precondition(expired == nil, "Previous-cycle percentages cannot describe the new cycle's pace")
+        precondition(WeeklyPace(window: RateLimitWindow(usedPercent: 40, resetsAt: reset, durationMinutes: durationMinutes), now: reset) == nil)
+        let huge = WeeklyPace(window: RateLimitWindow(usedPercent: Int.max, resetsAt: reset, durationMinutes: Int.max), now: start)!
+        precondition(huge.actualUsedPercent == 100 && huge.equivalentTime.isFinite)
+        _ = huge.summaryText
 
         precondition(WeeklyPace(window: RateLimitWindow(usedPercent: 40, resetsAt: nil, durationMinutes: durationMinutes)) == nil)
         precondition(WeeklyPace(window: RateLimitWindow(usedPercent: 40, resetsAt: reset, durationMinutes: 300)) == nil)

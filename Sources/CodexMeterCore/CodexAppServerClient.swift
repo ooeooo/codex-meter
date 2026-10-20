@@ -178,6 +178,7 @@ public actor CodexAppServerClient {
     }
 
     public func waitForLogin(id loginID: String) async throws {
+        guard initialized, process?.isRunning == true else { throw CodexClientError.disconnected }
         if let result = completedLogins.removeValue(forKey: loginID) {
             return try result.get()
         }
@@ -203,6 +204,7 @@ public actor CodexAppServerClient {
         input = nil
         if process?.isRunning == true { process?.terminate() }
         process = nil
+        completedLogins.removeAll()
         failPending(with: CodexClientError.disconnected)
     }
 

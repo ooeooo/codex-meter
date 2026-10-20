@@ -20,11 +20,13 @@ private struct StatusOutput: Encodable {
 private enum CLIError: LocalizedError {
     case argument(String)
     case noUsage
+    case resetPending
 
     var errorDescription: String? {
         switch self {
         case .argument(let message): return message
         case .noUsage: return "Codex returned no rate-limit windows."
+        case .resetPending: return "The scheduled reset has passed; awaiting updated quota from Codex."
         }
     }
 }
@@ -64,7 +66,8 @@ struct CodexMeterCLI {
         let client = CodexAppServerClient()
         let payload = try await client.readRateLimits()
         await client.stop()
-        guard let tightest = payload.snapshot.mostConstrainedRemaining else { throw CLIError.noUsage }
+        guard !payload.snapshot.windows.isEmpty else { throw CLIError.noUsage }
+        guard let tightest = payload.snapshot.currentMostConstrainedWindow()?.remainingPercent else { throw CLIError.resetPending }
 
         let output = StatusOutput(
             fetchedAt: payload.fetchedAt,
