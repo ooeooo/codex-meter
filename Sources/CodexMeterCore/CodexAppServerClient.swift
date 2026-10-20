@@ -16,6 +16,7 @@ public actor CodexAppServerClient {
     private var processDiagnostics = CodexProcessDiagnostics()
     private var errorOutput: FileHandle?
     private var pendingReads: [Int: CheckedContinuation<RateLimitPayload, Error>] = [:]
+    private var pendingUsageReads: [Int: CheckedContinuation<AccountUsagePayload, Error>] = [:]
     private var pendingAccountReads: [Int: CheckedContinuation<CodexAccount?, Error>] = [:]
     private var pendingLoginStarts: [Int: CheckedContinuation<CodexLoginSession, Error>] = [:]
     private var pendingLogouts: [Int: CheckedContinuation<Void, Error>] = [:]
@@ -70,6 +71,32 @@ public actor CodexAppServerClient {
             Task {
                 try? await Task.sleep(for: .seconds(30))
                 self.timeoutRead(id: id)
+            }
+        }
+    }
+
+    public func readAccountUsage() async throws -> AccountUsagePayload {
+        if process?.isRunning != true { try start() }
+        let session = sessionID
+        try await ensureInitialized()
+        try requireInitializedSession(session)
+        protocolStage = "waiting for account/usage/read"
+        let id = nextID
+        nextID += 1
+        return try await withCheckedThrowingContinuation { continuation in
+            pendingUsageReads[id] = continuation
+            do {
+                // Omitting threadId requests full account history. Date filters
+                // operate on returned day buckets; unsupported params are not sent.
+                try send(["method": "account/usage/read", "id": id, "params": [:]])
+            } catch {
+                pendingUsageReads.removeValue(forKey: id)
+                continuation.resume(throwing: error)
+                return
+            }
+            Task {
+                try? await Task.sleep(for: .seconds(30))
+                self.timeoutUsageRead(id: id)
             }
         }
     }
@@ -207,6 +234,10 @@ public actor CodexAppServerClient {
 
     private func timeoutRead(id: Int) {
         pendingReads.removeValue(forKey: id)?.resume(throwing: CodexClientError.timedOut)
+    }
+
+    private func timeoutUsageRead(id: Int) {
+        pendingUsageReads.removeValue(forKey: id)?.resume(throwing: CodexClientError.timedOut)
     }
 
     private func timeoutAccountRead(id: Int) {
@@ -387,6 +418,17 @@ public actor CodexAppServerClient {
             return
         }
 
+        if let id = (root["id"] as? NSNumber)?.intValue, let continuation = pendingUsageReads.removeValue(forKey: id) {
+            do {
+                let usage = try AccountUsageParser.parseResponse(data)
+                protocolStage = "account usage received"
+                continuation.resume(returning: usage)
+            } catch {
+                continuation.resume(throwing: error)
+            }
+            return
+        }
+
         if let id = (root["id"] as? NSNumber)?.intValue, let continuation = pendingAccountReads.removeValue(forKey: id) {
             if let error = responseError(root) {
                 continuation.resume(throwing: error)
@@ -459,6 +501,9 @@ public actor CodexAppServerClient {
         let continuations = pendingReads.values
         pendingReads.removeAll()
         continuations.forEach { $0.resume(throwing: error) }
+        let usageContinuations = pendingUsageReads.values
+        pendingUsageReads.removeAll()
+        usageContinuations.forEach { $0.resume(throwing: error) }
         let accountContinuations = pendingAccountReads.values
         pendingAccountReads.removeAll()
         accountContinuations.forEach { $0.resume(throwing: error) }

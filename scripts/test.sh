@@ -20,6 +20,23 @@ swiftc \
 "$TMP/weekly-pace-check"
 
 swiftc \
+  -parse-as-library \
+  "$ROOT/Sources/CodexMeterCore/MeterLocalization.swift" \
+  "$ROOT/Sources/CodexMeterCore/RateLimitModels.swift" \
+  "$ROOT/Sources/CodexMeterCore/AccountQuotaHistory.swift" \
+  "$ROOT/Tests/AccountQuotaHistoryCheck.swift" \
+  -o "$TMP/account-quota-history-check"
+"$TMP/account-quota-history-check"
+
+swiftc \
+  -parse-as-library \
+  "$ROOT/Sources/CodexMeterCore/MeterLocalization.swift" \
+  "$ROOT/Sources/CodexMeterCore/AccountUsageModels.swift" \
+  "$ROOT/Tests/AccountUsageCheck.swift" \
+  -o "$TMP/account-usage-check"
+"$TMP/account-usage-check"
+
+swiftc \
   "$ROOT/Sources/CodexMeterCore/MeterLocalization.swift" \
   "$ROOT/Sources/CodexMeterCore/LocalActivity.swift" \
   "$ROOT/Tests/ActivityCheck.swift" \
@@ -37,6 +54,7 @@ swiftc \
   "$ROOT/Sources/CodexMeterCore/MeterLocalization.swift" \
   -parse-as-library \
   "$ROOT/Sources/CodexMeterCore/RateLimitModels.swift" \
+  "$ROOT/Sources/CodexMeterCore/AccountUsageModels.swift" \
   "$ROOT/Sources/CodexMeterCore/CodexAppServerClient.swift" \
   "$ROOT/Sources/CodexMeterCore/CodexExecutableLocator.swift" \
   "$ROOT/Sources/CodexMeterCore/CodexProcessDiagnostics.swift" \
@@ -48,6 +66,7 @@ if [[ "${SKIP_LIVE_CODEX_CHECK:-0}" != "1" ]]; then
   swiftc \
     "$ROOT/Sources/CodexMeterCore/MeterLocalization.swift" \
     "$ROOT/Sources/CodexMeterCore/RateLimitModels.swift" \
+    "$ROOT/Sources/CodexMeterCore/AccountUsageModels.swift" \
     "$ROOT/Sources/CodexMeterCore/CodexAppServerClient.swift" \
     "$ROOT/Sources/CodexMeterCore/CodexExecutableLocator.swift" \
     "$ROOT/Sources/CodexMeterCore/CodexProcessDiagnostics.swift" \
@@ -61,6 +80,7 @@ swiftc \
   "$ROOT/Sources/CodexMeterCore/MeterLocalization.swift" \
   "$ROOT/Sources/CodexMeterCore/RateLimitModels.swift" \
   "$ROOT/Sources/CodexMeterCore/LocalActivity.swift" \
+  "$ROOT/Sources/CodexMeterCore/AccountUsageModels.swift" \
   "$ROOT/Sources/CodexMeterCore/CodexAppServerClient.swift" \
   "$ROOT/Sources/CodexMeterCore/CodexExecutableLocator.swift" \
   "$ROOT/Sources/CodexMeterCore/CodexProcessDiagnostics.swift" \

@@ -33,10 +33,20 @@ struct AppServerHandshakeCheck {
         // Old stdout callbacks must not disconnect a replacement process.
         for _ in 0..<5 {
             // Polling must reuse an initialized connection without another handshake.
-            for _ in 0..<2 { checkPayload(try await client.readRateLimits()) }
+            for _ in 0..<2 {
+                checkPayload(try await client.readRateLimits())
+                let before = try await client.readAccount()
+                let usage = try await client.readAccountUsage()
+                let after = try await client.readAccount()
+                precondition(before == after && before?.email == "fixture@example.invalid")
+                precondition(usage.summary.lifetimeTokens == 123_456)
+                precondition(usage.days?.first?.day == "2026-10-20")
+                precondition(usage.days?.first?.tokens == 42)
+            }
             await client.stop()
         }
         try await checkPackagedDesktopLayouts(root: fixtureRoot, executable: executable)
+        try await checkUsageReads(root: fixtureRoot, executable: executable)
 
         for (scenario, expected) in [
             ("initialize-error", CodexClientError.server("Unsupported client capabilities")),
@@ -69,7 +79,7 @@ struct AppServerHandshakeCheck {
         }
         try await checkRestartDuringInitialize(root: fixtureRoot, executable: executable)
         try await checkReplaceDeadProcess(root: fixtureRoot, executable: executable)
-        print("App-server handshake, packaged desktop launch, repeated polling, initialization failure and reconnect checks passed")
+        print("App-server handshake, quota/analytics reads, unsupported analytics, pending-read cleanup and reconnect checks passed")
     }
 
     private static func checkPackagedDesktopLayouts(root: URL, executable: URL) async throws {
@@ -112,6 +122,46 @@ struct AppServerHandshakeCheck {
                 await packagedClient.stop()
                 throw error
             }
+        }
+    }
+
+    private static func checkUsageReads(root: URL, executable: URL) async throws {
+        for (scenario, expected) in [
+            ("usage-unsupported", AccountUsageError.unsupported),
+            ("usage-invalid", AccountUsageError.invalidResponse)
+        ] {
+            let home = root.appendingPathComponent(scenario, isDirectory: true)
+            try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+            let client = CodexAppServerClient(codexHome: home, executableURL: executable)
+            do {
+                _ = try await client.readAccountUsage()
+                preconditionFailure("Analytics failure was ignored")
+            } catch let error as AccountUsageError {
+                precondition(error == expected)
+            }
+            // Older/failed analytics must leave ordinary quota polling usable.
+            checkPayload(try await client.readRateLimits())
+            await client.stop()
+        }
+        let home = root.appendingPathComponent("stop-during-usage", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let client = CodexAppServerClient(codexHome: home, executableURL: executable)
+        let read = Task { try await client.readAccountUsage() }
+        do {
+            try await waitForMarker("usage-read-started", home: home)
+            await client.stop()
+            do {
+                _ = try await read.value
+                throw FixtureError.oldReadSucceeded
+            } catch let error as CodexClientError {
+                precondition(error == .disconnected)
+            }
+            checkPayload(try await client.readRateLimits())
+            await client.stop()
+        } catch {
+            read.cancel()
+            await client.stop()
+            throw error
         }
     }
 
@@ -213,6 +263,23 @@ struct AppServerHandshakeCheck {
                 }
             case (1, "initialized"):
                 step = 2
+            case (2, "account/read"):
+                guard let id = message["id"] else { exit(22) }
+                write(["id": id, "result": ["account": ["type": "chatgpt", "email": "fixture@example.invalid", "planType": "plus"]]])
+            case (2, "account/usage/read"):
+                guard let id = message["id"], let params = message["params"] as? [String: Any], params.isEmpty else { exit(22) }
+                if scenario == "usage-unsupported" {
+                    write(["id": id, "error": ["code": -32601, "message": "Method not found"]])
+                } else if scenario == "usage-invalid" {
+                    write(["id": id, "result": ["summary": NSNull()]])
+                } else if scenario == "stop-during-usage", let home {
+                    try mark("usage-read-started", home: home)
+                } else {
+                    write(["id": id, "result": [
+                        "summary": ["lifetimeTokens": 123_456],
+                        "dailyUsageBuckets": [["startDate": "2026-10-20", "tokens": 42]]
+                    ]])
+                }
             case (2, "account/rateLimits/read"):
                 guard let id = message["id"] else { exit(22) }
                 if scenario == "exit-with-pending-read", let home, !hasMarker("first-read-started", home: home) {

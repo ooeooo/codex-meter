@@ -6,15 +6,28 @@ struct MeterView: View {
     @ObservedObject var store: UsageStore
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("usageWindowsExpanded") private var usageWindowsExpanded = true
-    @AppStorage("localActivityExpanded") private var localActivityExpanded = true
+    @AppStorage("quotaHistoryExpanded") private var quotaHistoryExpanded = true
     @AppStorage("settingsExpanded") private var settingsExpanded = false
+    @State private var showingAnalytics = false
 
     var body: some View {
         ZStack(alignment: .top) {
             VStack(spacing: 0) {
                 header
                 Divider()
-                content
+                Picker(MeterLocalization.text("View"), selection: $showingAnalytics) {
+                    Text(MeterLocalization.text("Overview")).tag(false)
+                    Text(MeterLocalization.text("Analytics")).tag(true)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                if showingAnalytics {
+                    AccountUsageAnalyticsView(store: store)
+                        .id(store.activeAccountID)
+                } else {
+                    content
+                }
                 Divider()
                 settings
             }
@@ -65,10 +78,10 @@ struct MeterView: View {
             Button {
                 Task {
                     await store.refresh()
-                    await store.refreshActivity()
+                    await store.refreshAnalytics(force: true)
                 }
             } label: {
-                if store.isRefreshing {
+                if store.isRefreshing || store.isLoadingAnalytics {
                     ProgressView().controlSize(.small)
                 } else {
                     Image(systemName: "arrow.clockwise")
@@ -78,7 +91,7 @@ struct MeterView: View {
             }
             .buttonStyle(.plain)
             .help(MeterLocalization.text("Refresh usage"))
-            .disabled(store.isRefreshing)
+            .disabled(store.isRefreshing || store.isLoadingAnalytics)
             .accessibilityLabel(MeterLocalization.text("Refresh Codex usage"))
         }
         .padding(16)
@@ -149,35 +162,33 @@ struct MeterView: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .stroke(Color.white.opacity(colorScheme == .dark ? 0.08 : 0.3), lineWidth: 0.6)
             }
-            if let activity = store.activity {
-                Divider()
-                DisclosureGroup(isExpanded: $localActivityExpanded) {
-                    LocalActivityView(activity: activity, rates: store.costRates, currency: store.currency, totalSavings: store.totalSavings)
-                        .padding(.horizontal, -16)
-                } label: {
-                    SectionLabel(title: MeterLocalization.text("Local activity"), detail: MeterLocalization.format("%@ tokens", compactTokens(activity.total.totalTokens)))
+            Divider()
+            DisclosureGroup(isExpanded: $quotaHistoryExpanded) {
+                if let history = store.quotaHistory {
+                    AccountQuotaHistoryView(history: history)
+                        .padding(.top, 10)
+                } else {
+                    Text(MeterLocalization.text("History starts with the first successful account quota read."))
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 10)
                 }
-                .padding(16)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Color.white.opacity(colorScheme == .dark ? 0.08 : 0.3), lineWidth: 0.6)
-                }
-            } else if let activityError = store.activityError {
-                Divider()
-                HStack(alignment: .top, spacing: 9) {
-                    Image(systemName: "exclamationmark.circle")
+                if let error = store.historyError {
+                    Text(error)
+                        .font(.system(size: 10))
                         .foregroundStyle(.orange)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(MeterLocalization.text("Local activity unavailable"))
-                            .font(.system(size: 11, weight: .medium))
-                        Text(activityError)
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 6)
                 }
-                .padding(16)
+            } label: {
+                SectionLabel(title: MeterLocalization.text("Account quota history"), detail: MeterLocalization.text("All devices"))
+            }
+            .padding(16)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.white.opacity(colorScheme == .dark ? 0.08 : 0.3), lineWidth: 0.6)
             }
         }
     }
@@ -193,12 +204,26 @@ struct MeterView: View {
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, minHeight: 148)
-        } else if store.windows.isEmpty {
+        } else if store.windows.isEmpty && store.payload?.snapshot.credits == nil && store.bankedResetCount == nil {
             EmptyState(message: store.errorMessage ?? MeterLocalization.text("Usage data is unavailable."), retry: {
                 Task { await store.refresh() }
             }, copyDiagnostics: store.copyUsageDiagnostics, selectCodexApp: store.selectCodexApp)
         } else {
             VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    Image(systemName: "creditcard")
+                        .foregroundStyle(Color.accentColor)
+                    Text(MeterLocalization.text("Credits balance"))
+                        .font(.system(size: 10, weight: .medium))
+                    Spacer()
+                    Text(store.payload?.snapshot.credits?.displayBalance ?? MeterLocalization.text("Unavailable"))
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 9)
+                .help(MeterLocalization.text("Account credits returned by Codex, separate from included quota. No currency conversion is applied."))
+                Divider().padding(.leading, 16)
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.counterclockwise.circle")
                         .foregroundStyle(Color.accentColor)
@@ -213,7 +238,7 @@ struct MeterView: View {
                 .padding(.vertical, 9)
                 .help(store.bankedResetCount == nil
                     ? MeterLocalization.text("OpenAI did not return a banked reset count for this account")
-                    : MeterLocalization.text("Reset credits currently available for this account"))
+                    : MeterLocalization.text("Available reset counts can change through grants, use or expiry; a count change does not prove a reset."))
                 Divider().padding(.leading, 16)
                 ForEach(Array(store.windows.enumerated()), id: \.offset) { index, window in
                     UsageRow(window: window, now: store.payload?.fetchedAt ?? Date())
@@ -332,18 +357,6 @@ struct MeterView: View {
                 .frame(width: 150)
             }
             HStack {
-                Text(MeterLocalization.text("Currency"))
-                    .font(.system(size: 12))
-                Spacer()
-                Picker(MeterLocalization.text("Currency"), selection: $store.currency) {
-                    ForEach(DisplayCurrency.allCases) { currency in
-                        Text(currency.code).tag(currency)
-                    }
-                }
-                .labelsHidden()
-                .frame(width: 72)
-            }
-            HStack {
                 Text(MeterLocalization.text("Low-usage alert"))
                     .font(.system(size: 12))
                 Spacer()
@@ -355,19 +368,6 @@ struct MeterView: View {
                 .labelsHidden()
                 .frame(width: 72)
             }
-            DisclosureGroup(MeterLocalization.text("Fallback USD price for unknown models")) {
-                VStack(spacing: 7) {
-                    CostRateField(label: MeterLocalization.text("Input"), value: $store.inputRate)
-                    CostRateField(label: MeterLocalization.text("Cached input"), value: $store.cachedInputRate)
-                    CostRateField(label: MeterLocalization.text("Output"), value: $store.outputRate)
-                    Text(MeterLocalization.text("Only used when a model has no bundled official price. USD per million tokens."))
-                        .font(.system(size: 9))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.top, 6)
-            }
-            .font(.system(size: 11))
             Toggle(MeterLocalization.text("Launch at login"), isOn: Binding(
                 get: { store.launchAtLogin },
                 set: { store.setLaunchAtLogin($0) }
@@ -393,13 +393,6 @@ struct MeterView: View {
             return MeterLocalization.format("Updated %@", date.formatted(.dateTime.hour().minute().locale(MeterLocalization.locale))) + (store.planLabel.map { " · \($0)" } ?? "")
         }
         return MeterLocalization.text("Signed in through the Codex app")
-    }
-
-    private func compactTokens(_ value: Int64) -> String {
-        if value >= 1_000_000_000 { return String(format: "%.1fB", Double(value) / 1_000_000_000) }
-        if value >= 1_000_000 { return String(format: "%.1fM", Double(value) / 1_000_000) }
-        if value >= 1_000 { return String(format: "%.1fK", Double(value) / 1_000) }
-        return "\(value)"
     }
 }
 
@@ -442,143 +435,97 @@ private struct CelebrationBanner: View {
     }
 }
 
-private struct LocalActivityView: View {
-    let activity: LocalActivitySnapshot
-    let rates: LocalCostRates
-    let currency: DisplayCurrency
-    let totalSavings: Double
+private struct AccountQuotaHistoryView: View {
+    let history: AccountQuotaHistory
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(MeterLocalization.text("Seven days · checks every two minutes"))
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+            if history.chartPoints.isEmpty {
+                Text(MeterLocalization.text("Percentage quota was not provided for this account."))
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            } else {
+                quotaChart
+            }
+
+            if history.observations.count == 1 {
+                Text(MeterLocalization.text("First snapshot saved. Changes will appear after the next read."))
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(Array(history.recentChanges.prefix(2))) { observation in
+                changeRow(observation)
+            }
+            Text(MeterLocalization.text("Account snapshots include cloud and other devices. Gaps and resets break the line; usage across resets cannot be recovered."))
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var quotaChart: some View {
+        Chart(history.chartPoints) { point in
+            LineMark(
+                x: .value(MeterLocalization.text("Time"), point.date),
+                y: .value(MeterLocalization.text("Remaining quota"), point.remainingPercent),
+                series: .value("Series", point.series)
+            )
+            .foregroundStyle(by: .value(MeterLocalization.text("Usage window"), point.displayName))
+            .symbol(.circle)
+            .symbolSize(6)
+        }
+        .chartYScale(domain: 0...100)
+        .chartYAxis {
+            AxisMarks(values: [0, 50, 100]) { value in
+                AxisValueLabel {
+                    if let percent = value.as(Int.self) { Text("\(percent)%") }
+                }
+            }
+        }
+        .chartXAxis { AxisMarks(values: .automatic(desiredCount: 3)) }
+        .chartForegroundStyleScale(range: [Color.accentColor, Color.orange])
+        .frame(height: 90)
+        .accessibilityLabel(MeterLocalization.text("Account remaining quota history"))
+    }
+
+    private func changeRow(_ observation: AccountQuotaObservation) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(intervalText(observation))
+                .foregroundStyle(.secondary)
+            ForEach(observation.changes.filter { $0.kind != .unchanged && $0.kind != .baseline }) { change in
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(MeterLocalization.text("Local activity"))
-                        .font(.system(size: 12, weight: .medium))
-                    Text(MeterLocalization.text("Seven days · read from local session logs"))
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 1) {
-                    Text(compactTokens(activity.total.totalTokens))
-                        .font(.system(size: 17, weight: .semibold, design: .rounded))
-                        .monospacedDigit()
-                    Text(MeterLocalization.text("tokens"))
-                        .font(.system(size: 9))
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Chart(activity.days) { day in
-                BarMark(
-                    x: .value(MeterLocalization.text("Day"), day.date, unit: .day),
-                    y: .value(MeterLocalization.text("Tokens"), day.usage.totalTokens)
-                )
-                .foregroundStyle(Color.accentColor)
-                .cornerRadius(2)
-            }
-            .chartXAxis {
-                AxisMarks(values: .stride(by: .day)) { value in
-                    AxisValueLabel(format: .dateTime.weekday(.narrow))
-                }
-            }
-            .chartYAxis(.hidden)
-            .frame(height: 62)
-            .accessibilityLabel(MeterLocalization.text("Seven-day local token activity"))
-            .accessibilityValue(accessibilitySummary)
-
-            if !activity.models.isEmpty {
-                VStack(spacing: 6) {
-                    ForEach(activity.models) { item in
-                        HStack(spacing: 8) {
-                            Text(item.model)
-                                .font(.system(size: 10, weight: .medium))
-                                .lineLimit(1)
-                            Spacer()
-                            Text(modelShare(item))
-                                .foregroundStyle(.secondary)
-                            Text(modelCost(item))
-                                .monospacedDigit()
-                                .frame(width: 54, alignment: .trailing)
-                        }
-                        .font(.system(size: 10))
-                        .accessibilityElement(children: .combine)
+                    Text(change.summary)
+                    if let detail = change.resetDetail {
+                        Text(detail)
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
-
-            HStack {
-                Text(MeterLocalization.format("Today %@", compactTokens(activity.today.totalTokens)))
-                Spacer()
-                Text(MeterLocalization.format("API-equivalent ≈ %@", formatted(automaticEstimate)))
+            if observation.balanceChanged, let previous = observation.previousCredits,
+               let current = observation.payload.snapshot.credits {
+                Text(MeterLocalization.format("Credits: %@ → %@", previous.displayBalance, current.displayBalance))
             }
-            .font(.system(size: 10))
-            .foregroundStyle(.secondary)
-            Text(MeterLocalization.text("API prices checked 15 Jul 2026 · estimate only"))
-                .font(.system(size: 9))
-                .foregroundStyle(.tertiary)
-            if totalSavings > 0 {
-                Text(MeterLocalization.format("Estimated savings vs GPT-5.6 Sol: %@", formatted(totalSavings)))
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Color.accentColor)
+            if observation.resetCreditsChanged, let previous = observation.previousResetCredits,
+               let current = observation.payload.availableResetCredits {
+                Text(MeterLocalization.format("Banked resets: %d → %d", previous, current))
+            }
+            if observation.hasGap {
+                Text(MeterLocalization.text("Includes an unobserved interval; device and exact usage times are unknown."))
+                    .foregroundStyle(.secondary)
             }
         }
-        .padding(16)
+        .font(.system(size: 10))
+        .fixedSize(horizontal: false, vertical: true)
     }
 
-    private var automaticEstimate: Double {
-        let usd = activity.models.reduce(0) { total, item in
-            if let price = OpenAIPriceCatalog.price(for: item.model) { return total + price.estimate(item.usage) }
-            return total + (rates.isConfigured ? rates.estimate(item.usage) : 0)
-        }
-        return currency.convertFromUSD(usd)
-    }
-
-    private func modelCost(_ item: ModelTokenUsage) -> String {
-        if let price = OpenAIPriceCatalog.price(for: item.model) {
-            return formatted(currency.convertFromUSD(price.estimate(item.usage)))
-        }
-        if rates.isConfigured { return formatted(currency.convertFromUSD(rates.estimate(item.usage))) + "*" }
-        return MeterLocalization.text("Unpriced")
-    }
-
-    private func modelShare(_ item: ModelTokenUsage) -> String {
-        guard activity.total.totalTokens > 0 else { return "0%" }
-        return "\(Int((Double(item.usage.totalTokens) / Double(activity.total.totalTokens) * 100).rounded()))% · \(compactTokens(item.usage.totalTokens))"
-    }
-
-    private func formatted(_ amount: Double) -> String {
-        "\(currency.symbol)\(amount.formatted(.number.precision(.fractionLength(2))))"
-    }
-
-    private func compactTokens(_ value: Int64) -> String {
-        if value >= 1_000_000_000 { return String(format: "%.1fB", Double(value) / 1_000_000_000) }
-        if value >= 1_000_000 { return String(format: "%.1fM", Double(value) / 1_000_000) }
-        if value >= 1_000 { return String(format: "%.1fK", Double(value) / 1_000) }
-        return "\(value)"
-    }
-
-    private var accessibilitySummary: String {
-        activity.days.map { day in
-            MeterLocalization.format("%@: %lld tokens", day.date.formatted(.dateTime.weekday(.wide).locale(MeterLocalization.locale)), day.usage.totalTokens)
-        }.joined(separator: ", ")
-    }
-}
-
-private struct CostRateField: View {
-    let label: String
-    @Binding var value: Double
-
-    var body: some View {
-        HStack {
-            Text(label)
-            Spacer()
-            TextField("0", value: $value, format: .number.precision(.fractionLength(0...2)))
-                .multilineTextAlignment(.trailing)
-                .frame(width: 58)
-            Text("$/M")
-                .foregroundStyle(.secondary)
-        }
+    private func intervalText(_ observation: AccountQuotaObservation) -> String {
+        let end = observation.payload.fetchedAt.formatted(.dateTime.month().day().hour().minute().locale(MeterLocalization.locale))
+        guard let start = observation.previousFetchedAt else { return end }
+        return start.formatted(.dateTime.month().day().hour().minute().locale(MeterLocalization.locale)) + " → " + end
     }
 }
 

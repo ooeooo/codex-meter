@@ -4,7 +4,7 @@
 
 <h1 align="center">Codex Meter</h1>
 
-<p align="center"><strong>在 macOS 菜单栏查看 Codex 余量、重置时间、模型用量与费用估算。</strong></p>
+<p align="center"><strong>在 macOS 菜单栏查看整个 Codex 账号的余量、余额与重置时间。</strong></p>
 
 <p align="center">原生 Swift 应用 · 简体中文 / English · Apple 芯片与 Intel · MIT 开源</p>
 
@@ -24,22 +24,24 @@
 
 ## 中文介绍
 
-Codex Meter 是一款免费、开源的 macOS 菜单栏应用，用于查看 **Codex 还剩多少可用额度、何时重置，以及本地记录的模型与 token 用量**。应用直接使用本机 Codex 的用量服务和已有登录状态；首次使用默认账号时，不需要创建额外的 Meter 账号，也不需要 API Key。
+Codex Meter 是一款免费、开源的 macOS 菜单栏应用，用于查看 **整个 Codex 账号的余量、积分余额、重置时间，以及 7 天／30 天的每日用量分析**。应用直接使用本机 Codex 的用量服务和已有登录状态；首次使用默认账号时，不需要创建额外的 Meter 账号，也不需要 API Key。
 
 支持独立的 `Codex.app`，以及集成 Codex 的新版 `ChatGPT.app`。即使本机没有独立的 `/Applications/Codex.app`，也可以使用 `ChatGPT.app` 内置的 Codex 服务，**无需另外安装 CLI**。
 
 ### 主要功能
 
 - **余量与重置时间**：菜单栏显示各配额窗口中最低的剩余比例，展开后可分别查看各窗口和重置时间。
-- **用量趋势**：七天 token 活动图表、按模型统计的本地用量，以及适用窗口的每周使用进度。
-- **费用估算**：根据内置的模型标准 API 价格估算，支持 USD、AUD 和 EUR。
+- **账号余量历史**：每两分钟读取并保存账号快照，包含云端和其他设备的使用变化；重启后同周期内的余量下降也会记录。
+- **每日用量分析**：在“分析”页切换最近 7 天／30 天，查看账号每日 token 图表、期间合计与单日峰值；支持日期查找、用量升降序和仅看有用量日期。
+- **重置与停机处理**：按配额窗口和重置时间区分周期，余量回升或跨周期时提示重置或调整，无法还原的区间标为未知。
+- **余额与重置次数**：显示服务返回的积分余额、可用重置次数；未返回的数据明确显示为未提供。
 - **自动刷新与提醒**：每两分钟刷新配额，支持手动重试、低余量提醒和登录时启动。
 - **中文界面**：支持简体中文和英文，默认跟随系统语言，可在设置中即时切换并保存选择。
 - **账号管理**：支持浏览器登录添加独立账号，并选择仅切换 Meter 视图或同时切换 Codex 桌面账号。
 - **错误诊断**：显示不可用或过期状态，支持复制经过凭据脱敏的诊断信息及手动选择 Codex 应用。
 - **脚本支持**：安装包附带可选的 `codex-meter` 命令行工具，提供稳定的英文文本、JSON 和余量阈值退出码。
 
-> 费用显示为 **API 等价估算**，不代表 ChatGPT 订阅账单或实际扣费。
+> 配额变化以百分点表示，不换算为 token 或费用。可选 CLI 的本地 token 历史与 API 等价估算仍可使用。
 
 ### 系统与支持范围
 
@@ -74,13 +76,23 @@ Codex Meter 是一款免费、开源的 macOS 菜单栏应用，用于查看 **C
 
 菜单栏取各配额窗口中最低的剩余比例。展开 **配额窗口** 可分别查看，不能将该汇总值与单个窗口直接比较。
 
+**能知道配额何时重置，并据此处理统计吗？**
+
+可以，接口返回各窗口的下次计划重置时间 `resetsAt`。同周期内计算余量净减少；跨过旧重置时间且接口返回新的未来重置时间后，按新周期处理，显示当前周期已用比例和前后重置时间。若时间已过但接口仍返回过期窗口，则显示“等待配额更新”，不继续计算旧周期消耗。停机期间旧周期最后一段未采样的用量仍无法还原。
+
 **切换账号会退出桌面应用的登录吗？**
 
 选择 **Meter Only（仅用量计）** 只切换用量视图；选择 **Meter + Codex（用量计 + Codex）** 会退出 Codex 桌面账号并打开 OpenAI 浏览器登录流程。密码、SSO 和验证码由浏览器与 Codex 处理。
 
+**如何查看 Codex 设置中那样的每日分析？**
+
+点击顶部的 **分析**，选择 **7 天** 或 **30 天**。图表及合计覆盖所选时间范围；在每日明细中可按日期查找、切换日期或用量排序，以及勾选“仅看有用量”。点击明细行可在图中突出对应日期。分析通过 `account/usage/read` 直接获取账号历史，不依赖程序此前是否运行，也不从配额百分点推算 token。
+
+每日统计每十分钟刷新，也可手动刷新。日期沿用 Codex 返回的统计日期，所选范围包含今天；未返回的日期标为“未提供”，部分覆盖时合计仅包含已返回的天数。当前接口没有模型、项目、来源或货币账单字段。旧版本若不支持账号分析，会提示更新 Codex，并保留正常的配额显示。
+
 **哪些数据会被读取？**
 
-配额通过本机 `codex app-server` 从官方服务获取；本地历史只保留模型、时间和 token 汇总，提示词、回答和工具内容不进入统计结果。图表来自本机默认 `~/.codex` 日志，不代表云端、其他设备或所选账号的完整历史。Meter 不直接读取或复制登录令牌，添加与切换账号的凭据由 Codex 管理。本地历史不会上传到额外的分析服务。详见 [隐私说明](docs/privacy.md) 和 [架构说明](docs/architecture.md)。
+配额通过本机 `codex app-server` 从官方服务获取，反映整个账号的当前余量。应用不再自动扫描会话日志，历史仅保存账号标识、时间、配额、积分余额和可用重置次数，并按账号及登录配置隔离。Meter 不直接读取或复制登录令牌，添加与切换账号的凭据由 Codex 管理；快照不会上传到额外的分析服务。当前协议没有完整的重置历史接口：重置券明细仅表示当前可用的券，不能据此还原停机期间发生的所有重置或消耗。详见 [隐私说明](docs/privacy.md) 和 [架构说明](docs/architecture.md)。
 
 ### 中文支持与问题反馈
 
@@ -98,21 +110,21 @@ Codex Meter 是一款免费、开源的 macOS 菜单栏应用，用于查看 **C
   <img src="docs/images/hero.svg" alt="Codex Meter — know what's left and what used it" width="100%">
 </p>
 
-**Your Codex limits, reset times, model usage and local cost estimate—right in the macOS menu bar.**
+**Your whole Codex account’s remaining quota, credits and reset times in the macOS menu bar.**
 
-Codex Meter is a free, open-source macOS menu bar app that shows how much Codex usage you have left, when it resets, which models used it, and what that activity would cost at standard API rates.
+Codex Meter is a free, open-source macOS menu bar app that shows account-wide remaining quota, credits, reset times and daily token analytics, including changes caused by cloud sessions and other devices.
 
 I built this because I wanted one simple answer sitting in the menu bar: **how much Codex do I have left?** I did not want fake estimates, a web account, an Electron app or another service collecting usage data.
 
-> Cost is always labelled as an **API-equivalent estimate**. It is not presented as your ChatGPT subscription bill.
+> Quota history shows net percentage-point changes. Optional CLI local-token history and API-equivalent estimates remain available.
 
 ## At a glance
 
-| Quota | Local insight | Cost | Automation |
+| Quota | Account history | Credits | Automation |
 | --- | --- | --- | --- |
-| Remaining percentage | Seven-day native chart | Official per-model rates | Universal CLI |
-| Exact reset time | Model-by-model usage | USD, AUD or EUR | JSON output |
-| Honest stale/error state | Prompts stay ignored | Unknown models stay unpriced | Threshold exit codes |
+| Remaining percentage | Seven-day native chart | Backend-reported balance | Universal CLI |
+| Reset time | Offline net changes | Available reset count | JSON output |
+| Honest stale/error state | Unknown intervals marked | Missing fields stay unavailable | Threshold exit codes |
 
 ## Why Codex Meter is different
 
@@ -122,15 +134,15 @@ If Codex cannot return a current limit, Codex Meter says it is unavailable. It n
 
 ### Open enough to trust
 
-The complete Swift source, local-log parser, build scripts and release automation are public. You can inspect exactly what the app reads and verify that it does not copy credentials or transmit local history.
+The complete Swift source, snapshot storage, optional CLI log parser, build scripts and release automation are public. You can inspect exactly what the app reads and verify that it does not copy credentials or upload history.
 
 ### A true one-job Mac app
 
-No Electron runtime, analytics SDK or external database. The native app uses a local Codex app-server process, polls quota every two minutes and automatically scans local activity every ten minutes; startup and profile changes can also trigger a scan.
+No Electron runtime, analytics SDK or external database. The native app uses a local Codex app-server process and polls account quota every two minutes. It stores bounded account snapshots without scanning session logs.
 
 ### Power without a privacy trade-off
 
-Alert thresholds, menu-bar modes, history charts, cost rates and CLI automation stay on your Mac. No separate API key or third-party Swift package is required. The app uses the existing Codex service and macOS system tools.
+Alert thresholds, menu-bar modes, account history and CLI automation stay on your Mac. No separate API key or third-party Swift package is required. The app uses the existing Codex service and macOS system tools.
 
 ## Features
 
@@ -143,19 +155,21 @@ Alert thresholds, menu-bar modes, history charts, cost rates and CLI automation 
 - Warns you when remaining usage drops below 10%, 20%, or 30%.
 - Detects stale or unavailable data instead of leaving a misleading old number visible.
 - Uses the existing default Codex sign-in without requiring a separate Meter profile, and offers sanitized copyable diagnostics when refresh fails.
-- Builds a seven-day token activity chart from aggregate events in local Codex session logs.
-- Breaks local usage down by the actual model recorded for each Codex turn.
-- Automatically calculates an API-equivalent estimate with bundled official OpenAI standard prices.
-- Displays estimates in USD, AUD or EUR with a dated local ECB reference-rate snapshot.
+- Persists seven days of account-wide quota snapshots, isolated by verified account identity and profile.
+- Adds an Analytics tab with 7-day/30-day account token charts, period totals, daily peaks, date lookup, usage sorting and an active-days filter. Daily analytics refresh every ten minutes and can recover server history from times when Meter was not running.
+- Keeps missing daily records visibly unavailable and separates period statistics from account lifetime totals.
+- Recovers net quota decreases after restarting within the same cycle and labels unobserved intervals.
+- Breaks chart lines across gaps, resets and allowance changes instead of inventing cross-cycle consumption.
+- Displays backend-reported credits separately from percentage quota; missing values remain unavailable.
 - Adds accounts through OpenAI's secure browser login, then hot-swaps profiles from the account menu beside refresh.
 - Asks whether each profile change should affect Meter only or Meter plus the Codex desktop app.
 - For a desktop swap, signs Codex out through the official app-server method, completes OpenAI's browser login, verifies the account and relaunches Codex.
 - Deletes unused local account profiles and their saved Codex credentials with confirmation, including stale records whose folder is already gone.
-- Shows OpenAI's real banked-reset count when the account returns it, and celebrates reset, savings and token milestones.
-- Switches between icon + percentage, reset + percentage, percentage-only, icon-only and activity-chart menu-bar modes.
+- Shows OpenAI's real banked-reset count when available. Changes in this count alone do not prove a reset.
+- Switches between icon + percentage, reset + percentage, percentage-only, icon-only and quota-history menu-bar modes.
 - Includes a universal `codex-meter` CLI with stable text/JSON output and threshold exit codes.
 - Supports launch at login without adding a Dock icon.
-- Keeps usage windows, activity, accounts and settings collapsible so the popover stays calm.
+- Keeps usage windows, quota history, accounts and settings collapsible so the popover stays calm.
 - Works natively on Apple silicon and Intel Macs.
 
 ## Download and install
@@ -203,7 +217,7 @@ This app has one job and does not need your data for anything else.
 - Meter does not read or copy login credentials; Codex manages credentials for explicitly added profiles
 - No uploaded session history
 
-Codex Meter starts the local `codex app-server` process and calls its read-only `account/rateLimits/read` method. Codex handles quota requests through its official service using the existing login. Explicit account additions and desktop account switches use OpenAI's browser login flow and Codex's authentication methods. For history, Meter prefilters `turn_context` and `token_count` lines from local rollout logs, then a narrow decoder retains only model IDs, timestamps and cumulative numeric totals; prompts, responses and tool payload fields are ignored. It never reads `~/.codex/auth.json` and never calls the rate-limit reset action. See [Privacy](docs/privacy.md) and [Architecture](docs/architecture.md) for the full data flow.
+Codex Meter starts the local `codex app-server` process and reads `account/rateLimits/read` plus `account/read` to verify identity when needed. Codex handles quota requests through its official service using the existing login. The app stores account identifiers, timestamps, quota windows, credit balances and available reset counts locally. It does not scan rollout logs; the optional CLI `history` command retains its explicit local-log workflow. Explicit account additions and desktop account switches use OpenAI's browser login flow and Codex's authentication methods. Meter never reads `~/.codex/auth.json` or consumes reset credits. The current protocol exposes no complete reset history, so consumption across resets remains unknown. See [Privacy](docs/privacy.md) and [Architecture](docs/architecture.md) for the full data flow.
 
 ## CLI and scripting
 
@@ -263,7 +277,7 @@ The data layer is ready for a future macOS widget, but the public ad-hoc build d
 
 ## Project status
 
-Codex Meter tracks the local Codex app-server interface and local rollout aggregate format. These can change between Codex versions, so compatibility fixes may be needed as Codex evolves. Errors are shown honestly rather than replaced with estimated quota data.
+Codex Meter tracks the Codex app-server interface; the optional CLI also tracks local rollout aggregates. These can change between Codex versions, so compatibility fixes may be needed as Codex evolves. Errors are shown honestly rather than replaced with estimated quota data.
 
 ## License
 

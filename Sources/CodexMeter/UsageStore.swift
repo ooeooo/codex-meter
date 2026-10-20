@@ -19,7 +19,7 @@ enum MenuBarDisplayMode: String, CaseIterable, Identifiable {
         case .resetAndPercentage: return MeterLocalization.text("Reset + percentage")
         case .percentage: return MeterLocalization.text("Percentage only")
         case .icon: return MeterLocalization.text("Icon only")
-        case .activity: return MeterLocalization.text("Activity chart")
+        case .activity: return MeterLocalization.text("Quota history")
         }
     }
 }
@@ -48,8 +48,14 @@ final class UsageStore: ObservableObject {
     @Published private(set) var isRefreshing = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var operationError: String?
-    @Published private(set) var activity: LocalActivitySnapshot?
-    @Published private(set) var activityError: String?
+    @Published private(set) var quotaHistory: AccountQuotaHistory?
+    @Published private(set) var historyError: String?
+    @Published private(set) var analytics: AccountUsagePayload?
+    @Published private(set) var analyticsError: String?
+    @Published private(set) var isLoadingAnalytics = false
+    @Published var analyticsRange: AccountUsageRange = .week {
+        didSet { UserDefaults.standard.set(analyticsRange.rawValue, forKey: Self.analyticsRangeKey) }
+    }
     @Published var language: MeterLanguage {
         didSet {
             MeterLocalization.language = language
@@ -64,12 +70,6 @@ final class UsageStore: ObservableObject {
     @Published var displayMode: MenuBarDisplayMode {
         didSet { UserDefaults.standard.set(displayMode.rawValue, forKey: Self.displayModeKey) }
     }
-    @Published var inputRate: Double { didSet { persistRates() } }
-    @Published var cachedInputRate: Double { didSet { persistRates() } }
-    @Published var outputRate: Double { didSet { persistRates() } }
-    @Published var currency: DisplayCurrency {
-        didSet { UserDefaults.standard.set(currency.rawValue, forKey: Self.currencyKey) }
-    }
     @Published private(set) var accounts: [AccountProfile]
     @Published var activeAccountID: UUID {
         didSet { UserDefaults.standard.set(activeAccountID.uuidString, forKey: Self.activeAccountKey) }
@@ -81,10 +81,12 @@ final class UsageStore: ObservableObject {
     private var client: CodexAppServerClient
     private var clientGeneration = UUID()
     private var rediscoverClientOnNextRefresh = false
-    private let activityScanner = LocalActivityScanner()
+    private let quotaHistoryStore = AccountQuotaHistoryStore()
     private let previewMode: Bool
     private var pollingTask: Task<Void, Never>?
-    private var activityPollingTask: Task<Void, Never>?
+    private var analyticsGeneration = UUID()
+    private var analyticsAccountKey: String?
+    private var lastAnalyticsAttemptAt: Date?
     private var loginTasks: [UUID: Task<Void, Never>] = [:]
     private var pendingNotificationIDs = Set<String>()
     private var lastUsageDiagnostics: String?
@@ -92,23 +94,19 @@ final class UsageStore: ObservableObject {
     // rather than this store, so keeping a message cannot create a retain cycle.
     private var errorMessageRenderer: (() -> String?)?
     private var operationErrorRenderer: (() -> String?)?
-    private var activityErrorRenderer: (() -> String?)?
+    private var historyErrorRenderer: (() -> String?)?
+    private var analyticsErrorRenderer: (() -> String?)?
     private var accountSwitchStatusRenderer: (() -> String?)?
     private var celebrationRenderer: (() -> Celebration?)?
     private static let languageKey = "appLanguage"
     private static let thresholdKey = "alertThreshold"
     private static let notifiedResetKey = "lastNotifiedReset"
     private static let displayModeKey = "menuBarDisplayMode"
-    private static let inputRateKey = "costInputRate"
-    private static let cachedInputRateKey = "costCachedInputRate"
-    private static let outputRateKey = "costOutputRate"
-    private static let currencyKey = "displayCurrency"
     private static let accountsKey = "accountProfiles"
     private static let activeAccountKey = "activeAccountID"
-    private static let savingsMilestoneKey = "lastSavingsMilestoneUSD"
-    private static let tokenMilestoneKey = "lastTokenMilestone"
     private static let resetMilestoneKey = "lastBankedReset"
     private static let selectedCodexAppKey = "selectedCodexAppPath"
+    private static let analyticsRangeKey = "analyticsDays"
 
     init(previewMode: Bool = false) {
         let savedLanguage = MeterLanguage(rawValue: UserDefaults.standard.string(forKey: Self.languageKey) ?? "") ?? .system
@@ -141,10 +139,7 @@ final class UsageStore: ObservableObject {
         let saved = UserDefaults.standard.integer(forKey: Self.thresholdKey)
         alertThreshold = saved == 0 ? 20 : saved
         displayMode = MenuBarDisplayMode(rawValue: UserDefaults.standard.string(forKey: Self.displayModeKey) ?? "") ?? .iconAndPercentage
-        inputRate = UserDefaults.standard.double(forKey: Self.inputRateKey)
-        cachedInputRate = UserDefaults.standard.double(forKey: Self.cachedInputRateKey)
-        outputRate = UserDefaults.standard.double(forKey: Self.outputRateKey)
-        currency = DisplayCurrency(rawValue: UserDefaults.standard.string(forKey: Self.currencyKey) ?? "") ?? .usd
+        analyticsRange = AccountUsageRange(rawValue: UserDefaults.standard.integer(forKey: Self.analyticsRangeKey)) ?? .week
         if previewMode {
             let now = Date()
             payload = RateLimitPayload(
@@ -153,25 +148,28 @@ final class UsageStore: ObservableObject {
                     limitName: "Codex",
                     planType: "plus",
                     primary: RateLimitWindow(usedPercent: 58, resetsAt: now.addingTimeInterval(8_040), durationMinutes: 300),
-                    secondary: RateLimitWindow(usedPercent: 32, resetsAt: now.addingTimeInterval(403_200), durationMinutes: 10_080)
+                    secondary: RateLimitWindow(usedPercent: 32, resetsAt: now.addingTimeInterval(403_200), durationMinutes: 10_080),
+                    credits: AccountCredits(hasCredits: true, unlimited: false, balance: "120.50")
                 ),
                 fetchedAt: now,
                 availableResetCredits: 3
             )
-            activity = LocalActivitySnapshot(
-                days: [8, 5, 6, 3, 7, 4, 9].enumerated().map { offset, millions in
-                    DailyTokenUsage(
-                        date: Calendar.current.date(byAdding: .day, value: offset - 6, to: Calendar.current.startOfDay(for: now)) ?? now,
-                        usage: TokenUsage(inputTokens: Int64(millions) * 900_000, cachedInputTokens: Int64(millions) * 650_000, outputTokens: Int64(millions) * 100_000, totalTokens: Int64(millions) * 1_000_000)
-                    )
-                },
-                models: [
-                    ModelTokenUsage(model: "gpt-5.6-sol", usage: TokenUsage(inputTokens: 25_000_000, cachedInputTokens: 18_000_000, outputTokens: 3_000_000, totalTokens: 28_000_000)),
-                    ModelTokenUsage(model: "gpt-5.6-terra", usage: TokenUsage(inputTokens: 14_000_000, cachedInputTokens: 10_000_000, outputTokens: 2_000_000, totalTokens: 16_000_000))
-                ],
-                sampledAt: now,
-                filesRead: 12
-            )
+            var history = AccountQuotaHistory(accountKey: "preview")
+            for offset in stride(from: 60, through: 0, by: -1) {
+                history.record(RateLimitPayload(
+                    snapshot: RateLimitSnapshot(limitID: "codex", limitName: "Codex", planType: "plus",
+                        primary: RateLimitWindow(usedPercent: 28 + (60 - offset) / 2, resetsAt: now.addingTimeInterval(8_040), durationMinutes: 300),
+                        secondary: RateLimitWindow(usedPercent: 20 + (60 - offset) / 5, resetsAt: now.addingTimeInterval(403_200), durationMinutes: 10_080)),
+                    fetchedAt: now.addingTimeInterval(Double(-offset * 120))))
+            }
+            quotaHistory = history
+            analytics = AccountUsagePayload(
+                summary: AccountUsageSummary(lifetimeTokens: 123_456_789, peakDailyTokens: 9_000_000,
+                    currentStreakDays: 4, longestStreakDays: 12),
+                days: (0..<30).compactMap { offset in
+                    guard let date = Calendar.current.date(byAdding: .day, value: -offset, to: now) else { return nil }
+                    return AccountUsageDay(day: AccountUsageDay.key(for: date), tokens: Int64((offset * 7 + 3) % 10) * 600_000)
+                }, fetchedAt: now)
         }
         if #available(macOS 13.0, *) {
             launchAtLogin = SMAppService.mainApp.status == .enabled
@@ -186,15 +184,6 @@ final class UsageStore: ObservableObject {
     var activeAccountDisplayName: String { accounts.first(where: { $0.id == activeAccountID })?.displayName ?? MeterLocalization.text("Default") }
     var canDeleteActiveAccount: Bool { accounts.first(where: { $0.id == activeAccountID })?.homePath != nil }
     var bankedResetCount: Int? { payload?.availableResetCredits }
-    var totalSavingsUSD: Double {
-        guard let activity else { return 0 }
-        guard let baseline = OpenAIPriceCatalog.price(for: "gpt-5.6-sol") else { return 0 }
-        return activity.models.reduce(0) { total, item in
-            guard let actual = OpenAIPriceCatalog.price(for: item.model) else { return total }
-            return total + max(0, baseline.estimate(item.usage) - actual.estimate(item.usage))
-        }
-    }
-    var totalSavings: Double { currency.convertFromUSD(totalSavingsUSD) }
     var menuBarRemaining: Int? {
         guard errorMessage == nil, !isStale else { return nil }
         return payload?.snapshot.mostConstrainedRemaining
@@ -205,9 +194,6 @@ final class UsageStore: ObservableObject {
     }
     var planLabel: String? {
         payload?.snapshot.planType?.replacingOccurrences(of: "_", with: " ").capitalized
-    }
-    var costRates: LocalCostRates {
-        LocalCostRates(inputPerMillion: inputRate, cachedInputPerMillion: cachedInputRate, outputPerMillion: outputRate)
     }
     var isStale: Bool {
         guard let fetchedAt = payload?.fetchedAt else { return false }
@@ -224,9 +210,28 @@ final class UsageStore: ObservableObject {
         operationError = render()
     }
 
-    private func setActivityError(_ render: @autoclosure @escaping () -> String?) {
-        activityErrorRenderer = render
-        activityError = render()
+    private func setHistoryError(_ render: @autoclosure @escaping () -> String?) {
+        historyErrorRenderer = render
+        historyError = render()
+    }
+
+    private func setAnalyticsError(_ render: @autoclosure @escaping () -> String?) {
+        analyticsErrorRenderer = render
+        analyticsError = render()
+    }
+
+    private func clearAnalytics() {
+        analyticsGeneration = UUID()
+        analytics = nil
+        analyticsAccountKey = nil
+        lastAnalyticsAttemptAt = nil
+        isLoadingAnalytics = false
+        setAnalyticsError(nil)
+    }
+
+    private static func analyticsIdentity(for account: CodexAccount?) -> String? {
+        guard let account, let email = account.email?.trimmingCharacters(in: .whitespacesAndNewlines), !email.isEmpty else { return nil }
+        return "\(account.type):\(email.lowercased())"
     }
 
     private func setAccountSwitchStatus(_ render: @autoclosure @escaping () -> String?) {
@@ -242,7 +247,8 @@ final class UsageStore: ObservableObject {
     private func renderLocalizedMessages() {
         errorMessage = errorMessageRenderer?()
         operationError = operationErrorRenderer?()
-        activityError = activityErrorRenderer?()
+        historyError = historyErrorRenderer?()
+        analyticsError = analyticsErrorRenderer?()
         accountSwitchStatus = accountSwitchStatusRenderer?()
         celebration = celebrationRenderer?()
     }
@@ -272,6 +278,7 @@ final class UsageStore: ObservableObject {
         client = Self.makeClient(codexHome: codexHome)
         rediscoverClientOnNextRefresh = false
         payload = nil
+        clearAnalytics()
         setErrorMessage(nil)
         lastUsageDiagnostics = nil
         isRefreshing = false
@@ -299,7 +306,6 @@ final class UsageStore: ObservableObject {
         UserDefaults.standard.set(appURL.path, forKey: Self.selectedCodexAppKey)
         setOperationError(nil)
         pollingTask?.cancel()
-        activityPollingTask?.cancel()
         let previousClient = rebuildCurrentClient()
         let nextClient = client
         let generation = clientGeneration
@@ -320,37 +326,13 @@ final class UsageStore: ObservableObject {
         pollingTask?.cancel()
         pollingTask = Task {
             await refresh()
+            await refreshAnalytics()
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(120))
                 guard !Task.isCancelled else { break }
                 await refresh()
+                await refreshAnalytics()
             }
-        }
-        activityPollingTask?.cancel()
-        activityPollingTask = Task {
-            await refreshActivity()
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(600))
-                guard !Task.isCancelled else { break }
-                await refreshActivity()
-            }
-        }
-    }
-
-    func refreshActivity() async {
-        let generation = clientGeneration
-        let accountID = activeAccountID
-        do {
-            let previous = activity
-            let snapshot = try await activityScanner.scan(days: 7)
-            guard clientGeneration == generation, activeAccountID == accountID else { return }
-            activity = snapshot
-            setActivityError(nil)
-            detectActivityMilestones(previous: previous, current: activity)
-        } catch {
-            guard clientGeneration == generation, activeAccountID == accountID else { return }
-            activity = nil
-            setActivityError((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
         }
     }
 
@@ -371,19 +353,56 @@ final class UsageStore: ObservableObject {
             guard isCurrentRequest(client: requestClient, accountID: accountID, generation: generation) else { return }
         }
         do {
+            let accountBefore = try? await requestClient.readAccount()
             let newPayload = try await requestClient.readRateLimits()
             guard isCurrentRequest(client: requestClient, accountID: accountID, generation: generation) else { return }
-            let previous = payload
+            if let key = analyticsAccountKey, Self.analyticsIdentity(for: accountBefore) != key { clearAnalytics() }
             payload = newPayload
             setErrorMessage(newPayload.snapshot.windows.isEmpty ? MeterLocalization.text("No Codex rate-limit windows were returned for this account.") : nil)
-            if newPayload.snapshot.windows.isEmpty {
+            if newPayload.snapshot.windows.isEmpty && newPayload.snapshot.credits == nil && newPayload.availableResetCredits == nil {
+                quotaHistory = nil
                 let diagnostics = await requestClient.diagnosticSummary()
                 guard isCurrentRequest(client: requestClient, accountID: accountID, generation: generation) else { return }
                 lastUsageDiagnostics = diagnostics
                 return
             }
             lastUsageDiagnostics = nil
-            detectBankedResetMilestone(previous: previous, current: newPayload)
+            let identity: String?
+            if let backendID = newPayload.accountID, !backendID.isEmpty {
+                identity = "account:\(backendID)"
+            } else {
+                // Older servers omit accountId. Verify account identity on both
+                // sides of the quota read before comparing historical values.
+                let accountAfter = try? await requestClient.readAccount()
+                guard isCurrentRequest(client: requestClient, accountID: accountID, generation: generation) else { return }
+                if let accountBefore, accountBefore == accountAfter,
+                   let email = accountBefore.email, !email.isEmpty {
+                    identity = "\(accountBefore.type):\(email.lowercased())"
+                } else {
+                    identity = nil
+                }
+            }
+            var previousAccountPayload: RateLimitPayload?
+            if let identity {
+                if let previousIdentity = quotaHistory?.accountKey, previousIdentity != identity { clearAnalytics() }
+                previousAccountPayload = quotaHistory.flatMap { $0.accountKey == identity ? $0.observations.last?.payload : nil }
+                do {
+                    let history = try await quotaHistoryStore.record(newPayload, profileID: accountID, accountKey: identity)
+                    guard isCurrentRequest(client: requestClient, accountID: accountID, generation: generation) else { return }
+                    quotaHistory = history
+                    setHistoryError(nil)
+                } catch {
+                    guard isCurrentRequest(client: requestClient, accountID: accountID, generation: generation) else { return }
+                    var history = quotaHistory.flatMap { $0.accountKey == identity ? $0 : nil } ?? AccountQuotaHistory(accountKey: identity)
+                    history.record(newPayload)
+                    quotaHistory = history
+                    setHistoryError(MeterLocalization.text("Quota history could not be saved. Current account quota is still available; changes may be lost after quitting."))
+                }
+            } else {
+                quotaHistory = nil
+                setHistoryError(MeterLocalization.text("Codex did not return a verifiable account identity. Current quota is shown without combining account history."))
+            }
+            detectBankedResetMilestone(previous: previousAccountPayload, current: newPayload)
             Task { [weak self] in
                 await self?.notifyIfNeeded(newPayload, accountID: accountID, generation: generation)
             }
@@ -395,6 +414,45 @@ final class UsageStore: ObservableObject {
             guard isCurrentRequest(client: requestClient, accountID: accountID, generation: generation) else { return }
             lastUsageDiagnostics = diagnostics
             await requestClient.stop()
+        }
+    }
+
+    /// Account history is fetched independently of quota. Unsupported analytics
+    /// and analytics failures never make a successful quota read fail.
+    func refreshAnalytics(force: Bool = false) async {
+        guard !previewMode, !isLoadingAnalytics else { return }
+        if !force, let lastAnalyticsAttemptAt, Date().timeIntervalSince(lastAnalyticsAttemptAt) < 600 { return }
+        let requestClient = client
+        let generation = clientGeneration
+        let accountID = activeAccountID
+        let analyticsToken = analyticsGeneration
+        isLoadingAnalytics = true
+        lastAnalyticsAttemptAt = Date()
+        defer {
+            if isCurrentRequest(client: requestClient, accountID: accountID, generation: generation), analyticsToken == analyticsGeneration {
+                isLoadingAnalytics = false
+            }
+        }
+        do {
+            let before = try await requestClient.readAccount()
+            guard isCurrentRequest(client: requestClient, accountID: accountID, generation: generation), analyticsToken == analyticsGeneration else { return }
+            guard let identity = Self.analyticsIdentity(for: before) else { throw AccountUsageError.unverifiedAccount }
+            if analyticsAccountKey != identity { analytics = nil }
+            analyticsAccountKey = identity
+            let usage = try await requestClient.readAccountUsage()
+            guard isCurrentRequest(client: requestClient, accountID: accountID, generation: generation), analyticsToken == analyticsGeneration else { return }
+            let after = try await requestClient.readAccount()
+            guard isCurrentRequest(client: requestClient, accountID: accountID, generation: generation), analyticsToken == analyticsGeneration else { return }
+            guard before == after, Self.analyticsIdentity(for: after) == identity else { throw AccountUsageError.unverifiedAccount }
+            analytics = usage
+            setAnalyticsError(nil)
+        } catch {
+            guard isCurrentRequest(client: requestClient, accountID: accountID, generation: generation), analyticsToken == analyticsGeneration else { return }
+            if error as? AccountUsageError == .unverifiedAccount {
+                analytics = nil
+                analyticsAccountKey = nil
+            }
+            setAnalyticsError((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
         }
     }
 
@@ -492,7 +550,6 @@ final class UsageStore: ObservableObject {
     private func switchMeterAccount(to id: UUID) {
         guard let profile = accounts.first(where: { $0.id == id }), id != activeAccountID else { return }
         pollingTask?.cancel()
-        activityPollingTask?.cancel()
         let previousClient = client
         let generation = UUID()
         clientGeneration = generation
@@ -501,10 +558,11 @@ final class UsageStore: ObservableObject {
         let nextClient = Self.makeClient(codexHome: profile.homeURL)
         client = nextClient
         payload = nil
-        activity = nil
+        clearAnalytics()
+        quotaHistory = nil
         setErrorMessage(nil)
         setOperationError(nil)
-        setActivityError(nil)
+        setHistoryError(nil)
         lastUsageDiagnostics = nil
         isRefreshing = false
         Task {
@@ -566,13 +624,13 @@ final class UsageStore: ObservableObject {
         let deletionClient = client
         if wasActive {
             pollingTask?.cancel()
-            activityPollingTask?.cancel()
             clientGeneration = UUID()
             rediscoverClientOnNextRefresh = false
             payload = nil
-            activity = nil
+            clearAnalytics()
+            quotaHistory = nil
             setErrorMessage(nil)
-            setActivityError(nil)
+            setHistoryError(nil)
             lastUsageDiagnostics = nil
             isRefreshing = false
         }
@@ -582,6 +640,12 @@ final class UsageStore: ObservableObject {
             do {
                 loginTasks.removeValue(forKey: profile.id)?.cancel()
                 try AccountProfileStorage.removeLocalProfile(at: home)
+                var historyCleanupFailed = false
+                do {
+                    try await quotaHistoryStore.remove(profileID: profile.id)
+                } catch {
+                    historyCleanupFailed = true
+                }
                 accounts.removeAll { $0.id == profile.id }
                 persistAccounts()
                 if wasActive,
@@ -591,6 +655,9 @@ final class UsageStore: ObservableObject {
                 }
                 setCelebration(Celebration(title: MeterLocalization.text("Account removed"), subtitle: MeterLocalization.text("Local credentials were deleted"), symbol: "trash"))
                 dismissCelebration()
+                if historyCleanupFailed {
+                    setOperationError(MeterLocalization.text("The account was removed, but its local quota history could not be deleted."))
+                }
             } catch {
                 if wasActive, isCurrentRequest(client: deletionClient, accountID: profile.id, generation: deletionGeneration) {
                     clientGeneration = UUID()
@@ -645,39 +712,12 @@ final class UsageStore: ObservableObject {
         UserDefaults.standard.set(try? JSONEncoder().encode(accounts), forKey: Self.accountsKey)
     }
 
-    private func detectActivityMilestones(previous: LocalActivitySnapshot?, current: LocalActivitySnapshot?) {
-        guard !previewMode, previous != nil, let current else { return }
-        let newSavings = current.models.reduce(0) { total, item in savingsUSD(for: item) + total }
-        let newTokens = current.total.totalTokens
-        let savingsStep = max(0, Int(newSavings / 50))
-        let savedStep = UserDefaults.standard.integer(forKey: Self.savingsMilestoneKey)
-        if savingsStep > savedStep, savingsStep > 0 {
-            UserDefaults.standard.set(savingsStep, forKey: Self.savingsMilestoneKey)
-            let selectedCurrency = currency
-            setCelebration(Celebration(title: MeterLocalization.format("%@ %lld saved", selectedCurrency.code, Int64(selectedCurrency.convertFromUSD(newSavings))), subtitle: MeterLocalization.text("Estimated savings versus GPT-5.6 Sol"), symbol: "sparkles"))
-            dismissCelebration()
-            return
-        }
-        let tokenStep = max(0, Int(newTokens / 1_000_000))
-        let oldTokenStep = UserDefaults.standard.integer(forKey: Self.tokenMilestoneKey)
-        if tokenStep >= 1, tokenStep > oldTokenStep, (tokenStep % 10 == 0 || oldTokenStep == 0) {
-            UserDefaults.standard.set(tokenStep, forKey: Self.tokenMilestoneKey)
-            setCelebration(Celebration(title: MeterLocalization.text("Token milestone"), subtitle: MeterLocalization.format("You have used %lldM local tokens", Int64(tokenStep)), symbol: "bolt.fill"))
-            dismissCelebration()
-        }
-    }
-
-    private func savingsUSD(for item: ModelTokenUsage) -> Double {
-        guard let baseline = OpenAIPriceCatalog.price(for: "gpt-5.6-sol"), let actual = OpenAIPriceCatalog.price(for: item.model) else { return 0 }
-        return max(0, baseline.estimate(item.usage) - actual.estimate(item.usage))
-    }
-
     private func detectBankedResetMilestone(previous: RateLimitPayload?, current: RateLimitPayload) {
         guard !previewMode,
               let previousCount = previous?.availableResetCredits,
               let currentCount = current.availableResetCredits,
               currentCount > previousCount else { return }
-        let key = "\(activeAccountID.uuidString)-\(currentCount)"
+        let key = "\(current.accountID ?? quotaHistory?.accountKey ?? activeAccountID.uuidString)-\(currentCount)"
         guard UserDefaults.standard.string(forKey: Self.resetMilestoneKey) != key else { return }
         UserDefaults.standard.set(key, forKey: Self.resetMilestoneKey)
         setCelebration(Celebration(title: MeterLocalization.text("Reset banked"), subtitle: MeterLocalization.format("%lld available for this account", Int64(currentCount)), symbol: "arrow.counterclockwise.circle.fill"))
@@ -763,7 +803,8 @@ final class UsageStore: ObservableObject {
 
         let fallbackBucket = Int(Date().timeIntervalSince1970 / 86_400)
         let resetComponent = constrained.resetsAt.map { Int($0.timeIntervalSince1970) } ?? fallbackBucket
-        let resetID = "\(accountID.uuidString)-\(constrained.durationMinutes ?? 0)-\(resetComponent)-\(alertThreshold)"
+        let identity = payload.accountID ?? quotaHistory?.accountKey ?? accountID.uuidString
+        let resetID = "\(identity)-\(constrained.durationMinutes ?? 0)-\(resetComponent)-\(alertThreshold)"
         guard UserDefaults.standard.string(forKey: Self.notifiedResetKey) != resetID,
               pendingNotificationIDs.insert(resetID).inserted else { return }
         defer { pendingNotificationIDs.remove(resetID) }
@@ -784,12 +825,6 @@ final class UsageStore: ObservableObject {
         try? await center.add(UNNotificationRequest(identifier: "codex-meter-low-\(resetID)", content: content, trigger: nil))
         guard clientGeneration == generation, activeAccountID == accountID else { return }
         UserDefaults.standard.set(resetID, forKey: Self.notifiedResetKey)
-    }
-
-    private func persistRates() {
-        UserDefaults.standard.set(max(0, inputRate), forKey: Self.inputRateKey)
-        UserDefaults.standard.set(max(0, cachedInputRate), forKey: Self.cachedInputRateKey)
-        UserDefaults.standard.set(max(0, outputRate), forKey: Self.outputRateKey)
     }
 }
 

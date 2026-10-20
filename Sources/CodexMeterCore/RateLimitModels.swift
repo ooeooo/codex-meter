@@ -160,13 +160,15 @@ public struct RateLimitSnapshot: Equatable, Sendable, Codable {
     public let planType: String?
     public let primary: RateLimitWindow?
     public let secondary: RateLimitWindow?
+    public let credits: AccountCredits?
 
-    public init(limitID: String?, limitName: String?, planType: String?, primary: RateLimitWindow?, secondary: RateLimitWindow?) {
+    public init(limitID: String?, limitName: String?, planType: String?, primary: RateLimitWindow?, secondary: RateLimitWindow?, credits: AccountCredits? = nil) {
         self.limitID = limitID
         self.limitName = limitName
         self.planType = planType
         self.primary = primary
         self.secondary = secondary
+        self.credits = credits
     }
 
     public var windows: [RateLimitWindow] { [primary, secondary].compactMap { $0 } }
@@ -176,15 +178,36 @@ public struct RateLimitSnapshot: Equatable, Sendable, Codable {
     public var mostConstrainedRemaining: Int? { mostConstrainedWindow?.remainingPercent }
 }
 
+/// The backend reports credits, not a currency amount or an API token balance.
+public struct AccountCredits: Equatable, Sendable, Codable {
+    public let hasCredits: Bool
+    public let unlimited: Bool
+    public let balance: String?
+
+    public init(hasCredits: Bool, unlimited: Bool, balance: String?) {
+        self.hasCredits = hasCredits
+        self.unlimited = unlimited
+        self.balance = balance
+    }
+
+    public var displayBalance: String {
+        if unlimited { return MeterLocalization.text("Unlimited") }
+        if let balance, !balance.isEmpty { return balance }
+        return MeterLocalization.text(hasCredits ? "Unavailable" : "No credits")
+    }
+}
+
 public struct RateLimitPayload: Equatable, Sendable, Codable {
     public let snapshot: RateLimitSnapshot
     public let fetchedAt: Date
     public let availableResetCredits: Int?
+    public let accountID: String?
 
-    public init(snapshot: RateLimitSnapshot, fetchedAt: Date, availableResetCredits: Int? = nil) {
+    public init(snapshot: RateLimitSnapshot, fetchedAt: Date, availableResetCredits: Int? = nil, accountID: String? = nil) {
         self.snapshot = snapshot
         self.fetchedAt = fetchedAt
         self.availableResetCredits = availableResetCredits
+        self.accountID = accountID
     }
 }
 
@@ -205,7 +228,8 @@ public enum RateLimitParser {
         return RateLimitPayload(
             snapshot: parseSnapshot(rawSnapshot),
             fetchedAt: now,
-            availableResetCredits: resetCredits.map { max(0, $0) }
+            availableResetCredits: resetCredits.map { max(0, $0) },
+            accountID: result["accountId"] as? String
         )
     }
 
@@ -234,8 +258,16 @@ public enum RateLimitParser {
             limitName: raw["limitName"] as? String,
             planType: raw["planType"] as? String,
             primary: parseWindow(raw["primary"]),
-            secondary: parseWindow(raw["secondary"])
+            secondary: parseWindow(raw["secondary"]),
+            credits: parseCredits(raw["credits"])
         )
+    }
+
+    private static func parseCredits(_ value: Any?) -> AccountCredits? {
+        guard let raw = value as? [String: Any],
+              let hasCredits = raw["hasCredits"] as? Bool,
+              let unlimited = raw["unlimited"] as? Bool else { return nil }
+        return AccountCredits(hasCredits: hasCredits, unlimited: unlimited, balance: raw["balance"] as? String)
     }
 
     private static func parseWindow(_ value: Any?) -> RateLimitWindow? {

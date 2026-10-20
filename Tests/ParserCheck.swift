@@ -21,6 +21,20 @@ struct ParserCheck {
         let banked = try require(RateLimitParser.parseResponse(Data(withBankedResets.utf8)))
         precondition(banked.availableResetCredits == 2)
 
+        let withBalance = #"{"id":3,"result":{"accountId":"account-a","rateLimits":{"limitId":"codex","primary":{"usedPercent":10},"credits":{"hasCredits":true,"unlimited":false,"balance":"123.456789"}}}}"#
+        let balance = try require(RateLimitParser.parseResponse(Data(withBalance.utf8)))
+        precondition(balance.accountID == "account-a")
+        precondition(balance.snapshot.credits?.balance == "123.456789")
+        precondition(balance.snapshot.credits?.displayBalance == "123.456789")
+        precondition(payload.snapshot.credits == nil)
+        precondition(AccountCredits(hasCredits: true, unlimited: true, balance: nil).displayBalance == "Unlimited")
+        precondition(AccountCredits(hasCredits: true, unlimited: false, balance: nil).displayBalance == "Unavailable")
+        precondition(AccountCredits(hasCredits: false, unlimited: false, balance: nil).displayBalance == "No credits")
+        // Snapshots exported by earlier versions still decode with absent fields.
+        let legacy = #"{"snapshot":{"primary":{"usedPercent":10}},"fetchedAt":1}"#
+        let decodedLegacy = try JSONDecoder().decode(RateLimitPayload.self, from: Data(legacy.utf8))
+        precondition(decodedLegacy.accountID == nil && decodedLegacy.snapshot.credits == nil)
+
         let buckets = #"{"id":2,"result":{"rateLimits":{},"rateLimitsByLimitId":{"other":{"primary":{"usedPercent":4}},"codex":{"primary":{"usedPercent":22}}}}}"#
         let selected = try require(RateLimitParser.parseResponse(Data(buckets.utf8)))
         precondition(selected.snapshot.primary?.remainingPercent == 78)

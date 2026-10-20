@@ -56,13 +56,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
 
         store.start()
-        Publishers.CombineLatest4(store.$payload, store.$errorMessage, store.$displayMode, store.$activity)
+        Publishers.CombineLatest4(store.$payload, store.$errorMessage, store.$displayMode, store.$quotaHistory)
             .receive(on: RunLoop.main)
             .sink { [weak self] _, _, _, _ in self?.updateStatusItem() }
-            .store(in: &cancellables)
-        store.$currency
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.updateStatusItem() }
             .store(in: &cancellables)
         store.$language
             .receive(on: RunLoop.main)
@@ -106,7 +102,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
     }
 
-    @objc private func refresh() { Task { await store.refresh() } }
+    @objc private func refresh() {
+        Task {
+            await store.refresh()
+            await store.refreshAnalytics(force: true)
+        }
+    }
     @objc private func quit() { NSApp.terminate(nil) }
 
     private func updateStatusItem() {
@@ -131,10 +132,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 button.imagePosition = .imageOnly
                 button.title = ""
             case .activity:
-                let days = store.activity?.days ?? []
+                let days = store.quotaHistory?.dailyRemainingPercent() ?? []
                 button.image = days.isEmpty
-                    ? NSImage(systemSymbolName: "chart.bar", accessibilityDescription: MeterLocalization.text("Codex activity"))
-                    : activityImage(from: days)
+                    ? NSImage(systemSymbolName: "chart.bar", accessibilityDescription: MeterLocalization.text("Account quota history"))
+                    : quotaHistoryImage(from: days)
                 button.imagePosition = .imageOnly
                 button.title = ""
             }
@@ -144,6 +145,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             } ?? ""
             let paceText = WeeklyPace(window: window).map { MeterLocalization.format(" Weekly pace: %@.", $0.summaryText) } ?? ""
             button.toolTip = MeterLocalization.format("%@: %d%% remaining. %@.%@%@", window.displayName, remaining, countdown.accessibilityText, exactReset, paceText)
+            if store.displayMode == .activity, let snapshot = store.quotaHistory?.observations.last?.payload.snapshot,
+               let historyWindow = snapshot.secondary ?? snapshot.primary {
+                button.toolTip = (button.toolTip ?? "") + "\n" + MeterLocalization.format("History: last observed %@ remaining each day. Blank days were not observed.", historyWindow.displayName)
+            }
         } else {
             button.image = NSImage(systemSymbolName: "exclamationmark.circle", accessibilityDescription: MeterLocalization.text("Codex usage unavailable"))
             button.title = "—"
@@ -229,19 +234,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         return line
     }
 
-    private func activityImage(from days: [DailyTokenUsage]) -> NSImage {
+    private func quotaHistoryImage(from days: [Int?]) -> NSImage {
         let image = NSImage(size: NSSize(width: 22, height: 14))
         image.lockFocus()
         defer { image.unlockFocus() }
-        let values = days.suffix(7).map { Double($0.usage.totalTokens) }
-        let maximum = max(values.max() ?? 1, 1)
+        let values = days.suffix(7)
         NSColor.labelColor.setFill()
         for (index, value) in values.enumerated() {
-            let height = max(2, 12 * value / maximum)
+            guard let value else { continue }
+            let height = max(1, 12 * Double(value) / 100)
             NSBezierPath(roundedRect: NSRect(x: CGFloat(index) * 3.1, y: 1, width: 2.2, height: CGFloat(height)), xRadius: 0.7, yRadius: 0.7).fill()
         }
         image.isTemplate = true
-        image.accessibilityDescription = MeterLocalization.text("Seven-day Codex activity")
+        image.accessibilityDescription = MeterLocalization.text("Seven-day account remaining quota; blank days were not observed")
         return image
     }
 }

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Added account-wide daily token analytics from `account/usage/read`, with 7-day/30-day views, daily details, date lookup, usage sorting and an active-days filter.
+- Kept missing days distinct from zero use, separated lifetime statistics from period totals, and isolated analytics errors and pending results during account switches.
+
+- Replaced the app’s local-token activity panel with account-wide remaining-quota history, credit balance and available reset counts, polled every two minutes.
+- Persisted isolated account snapshots across restarts and recorded net decreases with their original observation intervals.
+- Marked gaps, new quota cycles, replenishment and changed allowances without inventing cross-reset usage; kept missing fields unavailable.
+- Retained scheduled reset times, displayed new-cycle used percentages, and paused interval calculations while expired quota windows await a backend update.
+- Updated the menu-bar chart to daily observed remaining quota and kept optional CLI local-token history independent.
+- Added offline regression checks for persistence, downtime, reset boundaries, account isolation and storage failures.
+
 ## 1.6.2 — 2026-10-11
 
 - Fixed the false “Codex is not installed” error for desktop builds that moved their bundled service into `Contents/Resources/codex-cli/`; support the packaged launcher, nested native executable and legacy layout without a separate CLI installation.
